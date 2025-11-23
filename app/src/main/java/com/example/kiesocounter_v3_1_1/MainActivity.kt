@@ -5,11 +5,14 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -57,6 +60,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import androidx.compose.ui.text.font.FontWeight
 
 val CATEGORIES = listOf(
     "Teszter kieső",
@@ -377,12 +381,14 @@ fun ChartScreen(navController: NavController, viewModel: MainViewModel) {
     }
 }
 
+
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MonthlyChartScreen(navController: NavController, viewModel: MainViewModel) {
     val monthlyData by viewModel.monthlyChartData.collectAsState()
+    var selectedDay by remember { mutableStateOf<Int?>(null) }
 
-    // Ha nincs adat, jelenítse meg az üzenetet
     if (monthlyData.isEmpty()) {
         Scaffold(
             topBar = {
@@ -403,14 +409,20 @@ fun MonthlyChartScreen(navController: NavController, viewModel: MainViewModel) {
         return
     }
 
-    // A havi adatokból oszlopok előkészítése kategóriánként
     val modelProducer = remember { ChartEntryModelProducer() }
 
+    // Színek definiálása a kategóriákhoz
+    val categoryColors = listOf(
+        Color(0xFFE57373), // Piros - Teszter kiesés
+        Color(0xFF64B5F6), // Kék - Inline kiesés
+        Color(0xFF81C784), // Zöld - Fedél szorult
+        Color(0xFFFFD54F), // Sárga - Mérnöki döntésre vár
+        Color(0xFFBA68C8)  // Lila - Egyéb
+    )
+
     LaunchedEffect(monthlyData) {
-        // Napok (x tengely) szerint rendezzük
         val sortedData = monthlyData.sortedBy { it.dayOfMonth }
 
-        // Kategóriákhoz tartozó sorozatok előkészítése
         val seriesList = CATEGORIES.map { category ->
             sortedData.map { day ->
                 entryOf(day.dayOfMonth.toFloat(), day.categoryTotals[category]?.toFloat() ?: 0f)
@@ -436,23 +448,187 @@ fun MonthlyChartScreen(navController: NavController, viewModel: MainViewModel) {
             )
         }
     ) { padding ->
-        Chart(
-            modifier = Modifier
-                .padding(padding)
-                .padding(16.dp)
-                .fillMaxSize(),
-            chart = columnChart(
-                mergeMode = com.patrykandpatrick.vico.core.chart.column.ColumnChart.MergeMode.Stack
-            ),
-            chartModelProducer = modelProducer,
-            bottomAxis = com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis(
-                valueFormatter = bottomAxisValueFormatter
+        Column(modifier = Modifier.padding(padding).padding(16.dp)) {
+            // Jelmagyarázat
+            Column(modifier = Modifier.padding(bottom = 16.dp)) {
+                Text("Jelmagyarázat:", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(8.dp))
+                CATEGORIES.forEachIndexed { index, category ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .background(
+                                    color = categoryColors[index],
+                                    shape = RoundedCornerShape(2.dp)
+                                )
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(category, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
+            // Kiválasztott nap adatainak megjelenítése
+            selectedDay?.let { day ->
+                val dayData = monthlyData.find { it.dayOfMonth == day }
+                dayData?.let { data ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "$day. nap részletei:",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                IconButton(
+                                    onClick = { selectedDay = null },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowBack,
+                                        contentDescription = "Bezár",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+
+                            CATEGORIES.forEachIndexed { index, category ->
+                                val value = data.categoryTotals[category] ?: 0
+                                if (value > 0) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .background(
+                                                    color = categoryColors[index],
+                                                    shape = RoundedCornerShape(2.dp)
+                                                )
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = "$category:",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Text(
+                                            text = "$value db",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(4.dp))
+                            Divider()
+                            Spacer(Modifier.height(4.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Napi összesen:",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "${data.categoryTotals.values.sum()} db",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Grafikon
+            Box(modifier = Modifier.weight(1f)) {
+                Chart(
+                    modifier = Modifier.fillMaxSize(),
+                    chart = columnChart(
+                        mergeMode = com.patrykandpatrick.vico.core.chart.column.ColumnChart.MergeMode.Stack,
+                        columns = listOf(
+                            com.patrykandpatrick.vico.core.component.shape.LineComponent(
+                                color = categoryColors[0].hashCode(),
+                                thicknessDp = 16f
+                            ),
+                            com.patrykandpatrick.vico.core.component.shape.LineComponent(
+                                color = categoryColors[1].hashCode(),
+                                thicknessDp = 16f
+                            ),
+                            com.patrykandpatrick.vico.core.component.shape.LineComponent(
+                                color = categoryColors[2].hashCode(),
+                                thicknessDp = 16f
+                            ),
+                            com.patrykandpatrick.vico.core.component.shape.LineComponent(
+                                color = categoryColors[3].hashCode(),
+                                thicknessDp = 16f
+                            ),
+                            com.patrykandpatrick.vico.core.component.shape.LineComponent(
+                                color = categoryColors[4].hashCode(),
+                                thicknessDp = 16f
+                            )
+                        )
+                    ),
+                    chartModelProducer = modelProducer,
+                    bottomAxis = com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis(
+                        valueFormatter = bottomAxisValueFormatter
+                    ),
+                    startAxis = com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis()
+                )
+            }
+
+            // Tippek a használathoz
+            Text(
+                text = "Tipp: Kattints egy napszámra az oszlop alatt a részletekért!",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
             )
-        )
+
+            // Napok kiválasztására szolgáló gombok
+            LazyRow(
+                modifier = Modifier.padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(monthlyData.sortedBy { it.dayOfMonth }.size) { index ->
+                    val dayData = monthlyData.sortedBy { it.dayOfMonth }[index]
+                    FilterChip(
+                        selected = selectedDay == dayData.dayOfMonth,
+                        onClick = {
+                            selectedDay = if (selectedDay == dayData.dayOfMonth) null else dayData.dayOfMonth
+                        },
+                        label = { Text("${dayData.dayOfMonth}.") }
+                    )
+                }
+            }
+        }
     }
 }
-
-
 
 // --- Komponensek és Dialógusok --- //
 

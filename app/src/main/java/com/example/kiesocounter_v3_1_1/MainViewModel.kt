@@ -16,6 +16,8 @@ import java.util.Calendar
 import java.util.Date
 import kotlin.random.Random
 
+
+
 // Adatstruktúra a havi diagramhoz
 data class MonthlyChartData(val dayOfMonth: Int, val categoryTotals: Map<String, Int>)
 
