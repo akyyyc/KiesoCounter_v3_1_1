@@ -291,9 +291,17 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
     }
 
     categoryForAddDialog?.let { categoryName ->
+        var smartButtons by remember { mutableStateOf<List<Int>>(emptyList()) }
+
+        // Betöltjük az okos gombokat
+        LaunchedEffect(categoryName) {
+            smartButtons = viewModel.getTopThreeNumbers(categoryName)
+        }
+
         AddNumberDialog(
             categoryName = categoryName,
             currentNumbers = allEntries.filter { it.categoryName == categoryName }.map { it.value },
+            smartButtons = smartButtons,  // ← ÚJ SOR
             onDismissRequest = { categoryForAddDialog = null },
             onConfirmation = { number, shouldClose ->
                 viewModel.addEntry(number, categoryName)
@@ -320,12 +328,15 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
         )
     }
 
+    // MainScreen-ben az AdminDialog hívásánál add hozzá:
+
     if (showAdminDialog) {
         AdminDialog(
             onDismissRequest = { showAdminDialog = false },
             onDeleteToday = { viewModel.deleteTodayEntries(); showAdminDialog = false },
             onGenerateYesterday = { viewModel.generateTestData(1); showAdminDialog = false },
             onGenerateWeek = { viewModel.generateTestData(7); showAdminDialog = false },
+            onGenerateToday = { viewModel.generateTodayData(); showAdminDialog = false },  // ← ÚJ
             onDeleteAll = { viewModel.deleteAllEntries(); showAdminDialog = false },
             onExportData = {
                 exportLauncher.launch("kiesocounter_backup_${System.currentTimeMillis()}.csv")
@@ -333,6 +344,12 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             },
             onImportData = {
                 importLauncher.launch("text/csv")
+                showAdminDialog = false
+            },
+            onReloadData = {  // ← ÚJ
+                scope.launch {
+                    viewModel.loadLastWorkdayData()
+                }
                 showAdminDialog = false
             }
         )
@@ -421,9 +438,18 @@ fun EditScreen(navController: NavController, viewModel: MainViewModel, categoryN
 fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
     val datePickerState = rememberDatePickerState()
     val selectedDateEntries by viewModel.selectedDayEntries.collectAsState()
+    var lastWorkdayEntries by remember { mutableStateOf<List<NumberEntry>>(emptyList()) }  // ← ÚJ
+    val scope = rememberCoroutineScope()  // ← ÚJ
 
     LaunchedEffect(datePickerState.selectedDateMillis) {
         viewModel.loadEntriesForSelectedDate(datePickerState.selectedDateMillis)
+
+        // Betöltjük az előző munkanap adatait is  ← ÚJ
+        datePickerState.selectedDateMillis?.let { millis ->
+            scope.launch {
+                lastWorkdayEntries = viewModel.getLastWorkdayBeforeDate(Date(millis))
+            }
+        }
     }
 
     Scaffold(
@@ -456,9 +482,10 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                                 CategoryView(
                                     categoryName = categoryName,
                                     entries = categoryEntries.reversed(),
-                                    lastWorkdayEntries = emptyList(),  // ← ADD HOZZÁ EZT A SORT
+                                    lastWorkdayEntries = lastWorkdayEntries,  // ← JAVÍTÁS
+                                    bingoModeEnabled = false,  // ← ezt is add hozzá ha nincs ott
                                     onAddClick = {},
-                                    onEditClick = {},
+                                    onEditClick = {},  // ← ADD HOZZÁ
                                     onEntryLongClick = { _ -> }
                                 )
                                 Spacer(Modifier.height(16.dp))
@@ -777,9 +804,11 @@ fun AdminDialog(
     onDeleteToday: () -> Unit,
     onGenerateYesterday: () -> Unit,
     onGenerateWeek: () -> Unit,
+    onGenerateToday: () -> Unit = {},  // ← ADD HOZZÁ
     onDeleteAll: () -> Unit,
-    onExportData: () -> Unit = {},  // ← ÚJ
-    onImportData: () -> Unit = {}   // ← ÚJ
+    onExportData: () -> Unit = {},
+    onImportData: () -> Unit = {},
+    onReloadData: () -> Unit = {}  // ← ÚJ
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -807,6 +836,16 @@ fun AdminDialog(
                     Text("📥 Adatok importálása (CSV)")
                 }
 
+                Spacer(Modifier.height(8.dp))
+
+                Button(
+                    onClick = onReloadData,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
+                ) {
+                    Text("🔄 Adatok újratöltése")
+                }
+
                 Spacer(Modifier.height(16.dp))
                 Divider()
                 Spacer(Modifier.height(16.dp))
@@ -819,6 +858,11 @@ fun AdminDialog(
                     Text("Mai adatok törlése")
                 }
                 Spacer(Modifier.height(8.dp))
+
+                Button(onClick = onGenerateToday, modifier = Modifier.fillMaxWidth()) {  // ← ÚJ
+                    Text("Mai nap feltöltése (random)")  // ← ÚJ
+                }  // ← ÚJ
+                Spacer(Modifier.height(8.dp))  // ← ÚJ
 
                 Button(onClick = onGenerateYesterday, modifier = Modifier.fillMaxWidth()) {
                     Text("Tegnapi nap feltöltése (random)")
@@ -1044,7 +1088,13 @@ fun EditEntryDialog(entry: NumberEntry, onDismissRequest: () -> Unit, onModify: 
 }
 
 @Composable
-fun AddNumberDialog(categoryName: String, currentNumbers: List<Int>, onDismissRequest: () -> Unit, onConfirmation: (Int, Boolean) -> Unit) {
+fun AddNumberDialog(
+    categoryName: String,
+    currentNumbers: List<Int>,
+    smartButtons: List<Int>,  // ← EZT ADD HOZZÁ
+    onDismissRequest: () -> Unit,
+    onConfirmation: (Int, Boolean) -> Unit
+) {
     var numberInput by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -1072,17 +1122,34 @@ fun AddNumberDialog(categoryName: String, currentNumbers: List<Int>, onDismissRe
                 Spacer(Modifier.height(16.dp))
                 Text("Gyorsgombok", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(8.dp))
-                val quickAddNumbers = listOf(1, 16, 100, 14, 50, 80)
+
+                // Felső sor - FIX gombok
+                val fixButtons = listOf(1, 16, 100)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    Button(onClick = { onConfirmation(quickAddNumbers[0], false) }) { Text("1") }
-                    Button(onClick = { onConfirmation(quickAddNumbers[1], false) }) { Text("16") }
-                    Button(onClick = { onConfirmation(quickAddNumbers[2], false) }) { Text("100") }
+                    Button(onClick = { onConfirmation(fixButtons[0], false) }) { Text("1") }
+                    Button(onClick = { onConfirmation(fixButtons[1], false) }) { Text("16") }
+                    Button(onClick = { onConfirmation(fixButtons[2], false) }) { Text("100") }
                 }
                 Spacer(Modifier.height(8.dp))
+
+                // Alsó sor - OKOS gombok (vagy alapértelmezett)
+                val defaultButtons = listOf(14, 50, 80)
+                val bottomButtons = if (smartButtons.size >= 3) {
+                    smartButtons.take(3)
+                } else {
+                    defaultButtons
+                }
+
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    Button(onClick = { onConfirmation(quickAddNumbers[3], false) }) { Text("14") }
-                    Button(onClick = { onConfirmation(quickAddNumbers[4], false) }) { Text("50") }
-                    Button(onClick = { onConfirmation(quickAddNumbers[5], false) }) { Text("80") }
+                    Button(onClick = { onConfirmation(bottomButtons[0], false) }) {
+                        Text(bottomButtons[0].toString())
+                    }
+                    Button(onClick = { onConfirmation(bottomButtons[1], false) }) {
+                        Text(bottomButtons[1].toString())
+                    }
+                    Button(onClick = { onConfirmation(bottomButtons[2], false) }) {
+                        Text(bottomButtons[2].toString())
+                    }
                 }
             }
         },

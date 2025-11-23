@@ -65,7 +65,7 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
         }
     }
 
-    private suspend fun loadLastWorkdayData() {
+    suspend fun loadLastWorkdayData() {
         val today = getStartOfDay(Date())
         val calendar = Calendar.getInstance()
 
@@ -78,19 +78,12 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             val startOfDay = getStartOfDay(checkDate)
             val endOfDay = getEndOfDay(checkDate)
 
-            // Szinkron lekérdezés - megnézzük van-e adat ezen a napon
+            // Lekérdezzük az adatokat erre a napra
             val entries = dao.getEntriesForDay(startOfDay, endOfDay)
+            val entryList = entries.first()  // ← JAVÍTÁS: first() használata
 
-            // Az első flow értéket várjuk
-            var found = false
-            entries.collect { entryList ->
-                if (entryList.isNotEmpty() && !found) {
-                    _lastWorkdayData.value = checkDate to entryList
-                    found = true
-                }
-            }
-
-            if (found) {
+            if (entryList.isNotEmpty()) {
+                _lastWorkdayData.value = checkDate to entryList
                 return // Megtaláltuk, kilépünk
             }
         }
@@ -193,7 +186,7 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
 
     open fun generateTestData(days: Int) {
         viewModelScope.launch {
-            for (i in 0 until days) {
+            for (i in 1.. days) {
                 val calendar = Calendar.getInstance()
                 calendar.add(Calendar.DAY_OF_YEAR, -i)
 
@@ -214,6 +207,21 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             }
             // Újra betöltjük az utolsó munkanap adatait
             loadLastWorkdayData()
+        }
+    }
+
+    open fun generateTodayData() {
+        viewModelScope.launch {
+            CATEGORIES.forEach { categoryName ->
+                for (j in 0..Random.nextInt(1, 5)) {
+                    val entry = NumberEntry(
+                        value = Random.nextInt(1, 100),
+                        categoryName = categoryName,
+                        timestamp = Date()
+                    )
+                    dao.insert(entry)
+                }
+            }
         }
     }
 
@@ -301,12 +309,62 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             // Újra betöltjük az utolsó munkanap adatait
             loadLastWorkdayData()
 
+            // Kis késleltetés, hogy frissüljön
+            kotlinx.coroutines.delay(100)
+
             Result.success(importedCount)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
+    // MainViewModel.kt-be add hozzá ezt a függvényt:
+
+    // Leggyakoribb 3 szám az utolsó 7 napból egy adott kategóriában
+    suspend fun getTopThreeNumbers(categoryName: String, days: Int = 7): List<Int> {
+        val calendar = Calendar.getInstance()
+        val endDate = calendar.time
+        calendar.add(Calendar.DAY_OF_YEAR, -(days + 1))  // ← JAVÍTÁS
+        val startDate = calendar.time
+
+        // Lekérdezzük az utolsó X nap adatait
+        val entries = dao.getEntriesForDay(getStartOfDay(startDate), getEndOfDay(endDate))
+
+        return entries.first()
+            .groupBy { it.value }
+            .mapValues { it.value.size }  // Megszámoljuk, hányszor fordul elő
+            .toList()
+            .sortedByDescending { it.second }  // Csökkenő sorrendbe rendezés
+            .take(3)  // Top 3
+            .map { it.first }  // Csak a számok
+    }
+    // Előző munkanap egy adott dátumhoz képest
+    suspend fun getLastWorkdayBeforeDate(selectedDate: Date): List<NumberEntry> {
+        val startDate = getStartOfDay(selectedDate)
+        val calendar = Calendar.getInstance()
+        calendar.time = startDate
+
+        // Max 30 napra visszamenőleg keresünk
+        for (i in 1..30) {
+            calendar.time = startDate
+            calendar.add(Calendar.DAY_OF_YEAR, -i)
+
+            val checkDate = calendar.time
+            val start = getStartOfDay(checkDate)
+            val end = getEndOfDay(checkDate)
+
+            val entries = dao.getEntriesForDay(start, end)
+            val entryList = entries.first()
+
+            if (entryList.isNotEmpty()) {
+                return entryList  // Megtaláltuk
+            }
+        }
+
+        return emptyList()  // Nincs előző munkanap
+    }
 }
+
+
 
 class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
