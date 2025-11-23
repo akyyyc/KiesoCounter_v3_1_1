@@ -65,6 +65,7 @@ import androidx.compose.ui.text.font.FontWeight
 val CATEGORIES = listOf(
     "Teszter kieső",
     "Inline kieső",
+    "F.A. kieső",        // ← ÚJ KATEGÓRIA
     "Fedél szorult",
     "Mérnöki döntésre vár",
     "Egyéb"
@@ -413,8 +414,9 @@ fun MonthlyChartScreen(navController: NavController, viewModel: MainViewModel) {
 
     // Színek definiálása a kategóriákhoz
     val categoryColors = listOf(
-        Color(0xFFE57373), // Piros - Teszter kiesés
-        Color(0xFF64B5F6), // Kék - Inline kiesés
+        Color(0xFFE57373), // Piros - Teszter kieső
+        Color(0xFF64B5F6), // Kék - Inline kieső
+        Color(0xFFFF9800), // Narancs - F.A. kieső  ← ÚJ
         Color(0xFF81C784), // Zöld - Fedél szorult
         Color(0xFFFFD54F), // Sárga - Mérnöki döntésre vár
         Color(0xFFBA68C8)  // Lila - Egyéb
@@ -591,6 +593,10 @@ fun MonthlyChartScreen(navController: NavController, viewModel: MainViewModel) {
                             com.patrykandpatrick.vico.core.component.shape.LineComponent(
                                 color = categoryColors[4].hashCode(),
                                 thicknessDp = 16f
+                            ),
+                            com.patrykandpatrick.vico.core.component.shape.LineComponent(
+                                color = categoryColors[5].hashCode(),
+                                thicknessDp = 16f
                             )
                         )
                     ),
@@ -665,12 +671,22 @@ fun CategoryView(
 ) {
     Column {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(text = categoryName, style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.weight(1f))
+            // + gomb BALRA
+            Button(onClick = onAddClick) {
+                Text("+")
+            }
+            Spacer(Modifier.width(8.dp))
+            // Szerkesztés gomb is BALRA
             IconButton(onClick = onEditClick) {
                 Icon(Icons.Default.Edit, contentDescription = "Szerkesztés")
             }
-            Button(onClick = onAddClick) { Text("+") }
+            Spacer(Modifier.width(8.dp))
+            // Kategória név - elfoglalja a maradék helyet
+            Text(
+                text = categoryName,
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.weight(1f)
+            )
         }
 
         Spacer(Modifier.height(8.dp))
@@ -678,9 +694,19 @@ fun CategoryView(
         if (entries.isEmpty()) {
             Text("Nincsenek bevitt számok.", style = MaterialTheme.typography.bodyLarge)
         } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 entries.forEach { entry ->
-                    Box(modifier = Modifier.combinedClickable(onClick = {}, onLongClick = { onEntryLongClick(entry) }).padding(horizontal = 4.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .combinedClickable(
+                                onClick = {},
+                                onLongClick = { onEntryLongClick(entry) }
+                            )
+                            .padding(horizontal = 4.dp)
+                    ) {
                         Text(text = "${entry.value},", style = MaterialTheme.typography.bodyLarge)
                     }
                 }
