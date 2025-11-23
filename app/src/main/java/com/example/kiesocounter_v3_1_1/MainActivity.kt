@@ -4,6 +4,8 @@ import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -23,6 +25,9 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -116,13 +121,63 @@ fun KiesoCounterApp() {
 @Composable
 fun MainScreen(navController: NavController, viewModel: MainViewModel) {
     val allEntries by viewModel.todayEntries.collectAsState()
+    val lastWorkdayEntries by viewModel.lastWorkdayEntries.collectAsState()  // ← ÚJ
     var categoryForAddDialog by remember { mutableStateOf<String?>(null) }
     var showUndoDialog by remember { mutableStateOf(false) }
     var showAdminDialog by remember { mutableStateOf(false) }
     var entryToEdit by remember { mutableStateOf<NumberEntry?>(null) }
+    var showExportSuccess by remember { mutableStateOf(false) }
+    var showImportSuccess by remember { mutableStateOf<Int?>(null) }
+    var showError by remember { mutableStateOf<String?>(null) }
+
+    val bingoModeEnabled by viewModel.bingoModeEnabled.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // Export launcher - fájl mentés
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    val csvContent = viewModel.exportAllDataToCSV()
+                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                        outputStream.write(csvContent.toByteArray())
+                    }
+                    showExportSuccess = true
+                } catch (e: Exception) {
+                    showError = "Export hiba: ${e.message}"
+                }
+            }
+        }
+    }
+
+    // Import launcher - fájl betöltés
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    val csvContent = context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader ->
+                        reader.readText()
+                    } ?: ""
+
+                    val result = viewModel.importDataFromCSV(csvContent)
+                    result.onSuccess { count ->
+                        showImportSuccess = count
+                    }.onFailure { error ->
+                        showError = "Import hiba: ${error.message}"
+                    }
+                } catch (e: Exception) {
+                    showError = "Import hiba: ${e.message}"
+                }
+            }
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -130,6 +185,7 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.5f)) {
                 Text("Menü", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleLarge)
                 Divider()
+
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Default.DateRange, contentDescription = "Naptár") },
                     label = { Text("Naptár") },
@@ -148,7 +204,43 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                     selected = false,
                     onClick = { navController.navigate("monthly-chart"); scope.launch { drawerState.close() } }
                 )
+
                 Divider()
+
+                // BINGÓ mód kapcsoló
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("🎯", style = MaterialTheme.typography.titleLarge)
+                        Column {
+                            Text(
+                                "BINGÓ",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "Mód",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = bingoModeEnabled,
+                        onCheckedChange = { viewModel.toggleBingoMode() }
+                    )
+                }
+
+                Divider()
+
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Default.BarChart, contentDescription = "Admin") },
                     label = { Text("ADMIN", color = Color.Red) },
@@ -177,6 +269,8 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                         CategoryView(
                             categoryName = categoryName,
                             entries = categoryEntries.reversed(),
+                            lastWorkdayEntries = lastWorkdayEntries,  // ← ÚJ paraméter
+                            bingoModeEnabled = bingoModeEnabled,  // ← ÚJ SOR
                             onAddClick = { categoryForAddDialog = categoryName },
                             onEditClick = {
                                 val encodedCategoryName = URLEncoder.encode(categoryName, StandardCharsets.UTF_8.name())
@@ -232,7 +326,45 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             onDeleteToday = { viewModel.deleteTodayEntries(); showAdminDialog = false },
             onGenerateYesterday = { viewModel.generateTestData(1); showAdminDialog = false },
             onGenerateWeek = { viewModel.generateTestData(7); showAdminDialog = false },
-            onDeleteAll = { viewModel.deleteAllEntries(); showAdminDialog = false }
+            onDeleteAll = { viewModel.deleteAllEntries(); showAdminDialog = false },
+            onExportData = {
+                exportLauncher.launch("kiesocounter_backup_${System.currentTimeMillis()}.csv")
+                showAdminDialog = false
+            },
+            onImportData = {
+                importLauncher.launch("text/csv")
+                showAdminDialog = false
+            }
+        )
+    }
+
+    // Export sikeres
+    if (showExportSuccess) {
+        AlertDialog(
+            onDismissRequest = { showExportSuccess = false },
+            title = { Text("Sikeres export") },
+            text = { Text("Az adatok sikeresen exportálva lettek!") },
+            confirmButton = { TextButton(onClick = { showExportSuccess = false }) { Text("OK") } }
+        )
+    }
+
+    // Import sikeres
+    showImportSuccess?.let { count ->
+        AlertDialog(
+            onDismissRequest = { showImportSuccess = null },
+            title = { Text("Sikeres import") },
+            text = { Text("$count bejegyzés importálva!") },
+            confirmButton = { TextButton(onClick = { showImportSuccess = null }) { Text("OK") } }
+        )
+    }
+
+    // Hibaüzenet
+    showError?.let { error ->
+        AlertDialog(
+            onDismissRequest = { showError = null },
+            title = { Text("Hiba") },
+            text = { Text(error) },
+            confirmButton = { TextButton(onClick = { showError = null }) { Text("OK") } }
         )
     }
 }
@@ -324,6 +456,7 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                                 CategoryView(
                                     categoryName = categoryName,
                                     entries = categoryEntries.reversed(),
+                                    lastWorkdayEntries = emptyList(),  // ← ADD HOZZÁ EZT A SORT
                                     onAddClick = {},
                                     onEditClick = {},
                                     onEntryLongClick = { _ -> }
@@ -640,20 +773,77 @@ fun MonthlyChartScreen(navController: NavController, viewModel: MainViewModel) {
 
 @Composable
 fun AdminDialog(
-    onDismissRequest: () -> Unit, onDeleteToday: () -> Unit, onGenerateYesterday: () -> Unit, onGenerateWeek: () -> Unit, onDeleteAll: () -> Unit
+    onDismissRequest: () -> Unit,
+    onDeleteToday: () -> Unit,
+    onGenerateYesterday: () -> Unit,
+    onGenerateWeek: () -> Unit,
+    onDeleteAll: () -> Unit,
+    onExportData: () -> Unit = {},  // ← ÚJ
+    onImportData: () -> Unit = {}   // ← ÚJ
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text("Admin Funkciók") },
         text = {
-            Column {
-                Button(onClick = onDeleteToday, modifier = Modifier.fillMaxWidth()) { Text("Mai adatok törlése") }
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // Export/Import szakasz
+                Text("Adatkezelés", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = onGenerateYesterday, modifier = Modifier.fillMaxWidth()) { Text("Tegnapi nap feltöltése (random)") }
+
+                Button(
+                    onClick = onExportData,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                ) {
+                    Text("📤 Adatok exportálása (CSV)")
+                }
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = onGenerateWeek, modifier = Modifier.fillMaxWidth()) { Text("Elmúlt 7 nap feltöltése (random)") }
+
+                Button(
+                    onClick = onImportData,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
+                ) {
+                    Text("📥 Adatok importálása (CSV)")
+                }
+
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = onDeleteAll, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("MINDEN ADAT TÖRLÉSE") }
+                Divider()
+                Spacer(Modifier.height(16.dp))
+
+                // Teszt adatok szakasz
+                Text("Teszt adatok", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+
+                Button(onClick = onDeleteToday, modifier = Modifier.fillMaxWidth()) {
+                    Text("Mai adatok törlése")
+                }
+                Spacer(Modifier.height(8.dp))
+
+                Button(onClick = onGenerateYesterday, modifier = Modifier.fillMaxWidth()) {
+                    Text("Tegnapi nap feltöltése (random)")
+                }
+                Spacer(Modifier.height(8.dp))
+
+                Button(onClick = onGenerateWeek, modifier = Modifier.fillMaxWidth()) {
+                    Text("Elmúlt 7 nap feltöltése (random)")
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Divider()
+                Spacer(Modifier.height(16.dp))
+
+                // Veszélyes műveletek
+                Text("⚠️ Veszélyes műveletek", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color.Red)
+                Spacer(Modifier.height(8.dp))
+
+                Button(
+                    onClick = onDeleteAll,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) {
+                    Text("MINDEN ADAT TÖRLÉSE")
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismissRequest) { Text("Bezárás") } }
@@ -665,10 +855,31 @@ fun AdminDialog(
 fun CategoryView(
     categoryName: String,
     entries: List<NumberEntry>,
+    lastWorkdayEntries: List<NumberEntry>,
+    bingoModeEnabled: Boolean = false,  // ← EZT ADD HOZZÁ
     onAddClick: () -> Unit,
     onEditClick: () -> Unit,
     onEntryLongClick: (NumberEntry) -> Unit
 ) {
+    // Mai összeg
+    val todayTotal = entries.sumOf { it.value }
+
+    // Utolsó munkanap összege erre a kategóriára
+    val lastWorkdayTotal = lastWorkdayEntries
+        .filter { it.categoryName == categoryName }
+        .sumOf { it.value }
+
+    // Utolsó munkanap számai erre a kategóriára
+    val lastWorkdayNumbers = lastWorkdayEntries
+        .filter { it.categoryName == categoryName }
+        .map { it.value }
+
+    // Mai számok
+    val todayNumbers = entries.map { it.value }
+
+    // Különbség megjelenítésének állapota kategóriánként
+    var showDifference by remember { mutableStateOf(false) }
+
     Column {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             // + gomb BALRA
@@ -714,7 +925,90 @@ fun CategoryView(
         }
 
         Spacer(Modifier.height(4.dp))
-        Text("Összesen: ${entries.sumOf { it.value }} db")
+        // BINGÓ mód - utolsó munkanap számai (ha be van kapcsolva)
+        if (bingoModeEnabled && lastWorkdayNumbers.isNotEmpty()) {
+            Text(
+                text = "Előző: ",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                lastWorkdayNumbers.forEach { number ->
+                    val isCommon = todayNumbers.contains(number)
+                    Text(
+                        text = "$number,",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isCommon) {
+                            Color(0xFF4CAF50) // Zöld ha közös (BINGÓ!)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f) // Halvány ha nem
+                        },
+                        fontWeight = if (isCommon) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+
+        // Összesen sor TREND IKONNAL
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text("Összesen: $todayTotal db")
+
+            // Trend ikon logika
+            when {
+                // Van előző adat
+                lastWorkdayEntries.isNotEmpty() && lastWorkdayTotal > 0 -> {
+                    val difference = todayTotal - lastWorkdayTotal
+
+                    Box(
+                        modifier = Modifier.clickable { showDifference = !showDifference }
+                    ) {
+                        when {
+                            difference > 0 -> {
+                                // Több kieső = piros felfelé
+                                Text("▲", color = Color.Red, style = MaterialTheme.typography.bodyLarge)
+                                if (showDifference) {
+                                    Text(
+                                        text = "+$difference",
+                                        color = Color.Red,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 8.sp,
+                                        modifier = Modifier.offset(x = 12.dp, y = (-4).dp)
+                                    )
+                                }
+                            }
+                            difference < 0 -> {
+                                // Kevesebb kieső = zöld lefelé
+                                Text("▼", color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodyLarge)
+                                if (showDifference) {
+                                    Text(
+                                        text = "$difference",
+                                        color = Color(0xFF4CAF50),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 8.sp,
+                                        modifier = Modifier.offset(x = 12.dp, y = (-4).dp)
+                                    )
+                                }
+                            }
+                            else -> {
+                                // Egyenlő = kék egyenlőség
+                                Text("=", color = Color(0xFF2196F3), style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+                // Nincs előző adat
+                lastWorkdayEntries.isEmpty() -> {
+                    Text("⚠", color = Color(0xFFFFC107), style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+        }
     }
 }
 
@@ -760,10 +1054,21 @@ fun AddNumberDialog(categoryName: String, currentNumbers: List<Int>, onDismissRe
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 if (currentNumbers.isNotEmpty()) {
-                    Text(text = "Legutóbb hozzáadott elemek: " + currentNumbers.take(8).reversed().joinToString(", "), style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                    Text(
+                        text = "Legutóbb hozzáadott elemek: " + currentNumbers.take(8).reversed().joinToString(", "),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2
+                    )
                     Spacer(Modifier.height(16.dp))
                 }
-                OutlinedTextField(value = numberInput, onValueChange = { numberInput = it }, label = { Text("Szám") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.focusRequester(focusRequester))
+                OutlinedTextField(
+                    value = numberInput,
+                    onValueChange = { numberInput = it },
+                    label = { Text("Szám") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.focusRequester(focusRequester)
+                )
                 Spacer(Modifier.height(16.dp))
                 Text("Gyorsgombok", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(8.dp))
@@ -783,7 +1088,9 @@ fun AddNumberDialog(categoryName: String, currentNumbers: List<Int>, onDismissRe
         },
         onDismissRequest = onDismissRequest,
         confirmButton = { TextButton(onClick = { numberInput.toIntOrNull()?.let { onConfirmation(it, true) } }) { Text("Ok") } },
-        dismissButton = { TextButton(onClick = onDismissRequest) { Text("Mégse") } }
+        dismissButton = { TextButton(onClick = onDismissRequest) { Text("Mégse") } },
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),  // ← ÁTLÁTSZÓSÁG
+        tonalElevation = 0.dp  // ← Nincs árnyék réteg
     )
 
     LaunchedEffect(Unit) {

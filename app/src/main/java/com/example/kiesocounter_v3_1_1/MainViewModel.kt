@@ -11,9 +11,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.Date
+import java.text.SimpleDateFormat  // ← ÚJ
+import java.util.Locale            // ← ÚJ
 import kotlin.random.Random
 
 
@@ -32,6 +35,70 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             .mapValues { (_, entries) -> entries.sumOf { it.value } }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
+    // MainViewModel.kt-be add hozzá ezt az állapotot a többi StateFlow mellé:
+
+    // BINGÓ mód állapota
+    private val _bingoModeEnabled = MutableStateFlow(false)
+    val bingoModeEnabled: StateFlow<Boolean> = _bingoModeEnabled.asStateFlow()
+
+    fun toggleBingoMode() {
+        _bingoModeEnabled.value = !_bingoModeEnabled.value
+    }
+
+    // ÚJ: Utolsó munkanapos adatok (max 30 napra visszamenőleg)
+    private val _lastWorkdayData = MutableStateFlow<Pair<Date?, List<NumberEntry>>>(null to emptyList())
+    val lastWorkdayEntries: StateFlow<List<NumberEntry>> = _lastWorkdayData
+        .map { it.second }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // ÚJ: Utolsó munkanap összesítései kategóriánként
+    val categoryTotalsLastWorkday: StateFlow<Map<String, Int>> = lastWorkdayEntries.map { entries ->
+        entries
+            .groupBy { it.categoryName }
+            .mapValues { (_, entries) -> entries.sumOf { it.value } }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    init {
+        // Betöltjük az utolsó munkanap adatait az inicializáláskor
+        viewModelScope.launch {
+            loadLastWorkdayData()
+        }
+    }
+
+    private suspend fun loadLastWorkdayData() {
+        val today = getStartOfDay(Date())
+        val calendar = Calendar.getInstance()
+
+        // Max 30 napra visszamenőleg keresünk
+        for (i in 1..30) {
+            calendar.time = today
+            calendar.add(Calendar.DAY_OF_YEAR, -i)
+
+            val checkDate = calendar.time
+            val startOfDay = getStartOfDay(checkDate)
+            val endOfDay = getEndOfDay(checkDate)
+
+            // Szinkron lekérdezés - megnézzük van-e adat ezen a napon
+            val entries = dao.getEntriesForDay(startOfDay, endOfDay)
+
+            // Az első flow értéket várjuk
+            var found = false
+            entries.collect { entryList ->
+                if (entryList.isNotEmpty() && !found) {
+                    _lastWorkdayData.value = checkDate to entryList
+                    found = true
+                }
+            }
+
+            if (found) {
+                return // Megtaláltuk, kilépünk
+            }
+        }
+
+        // Ha nem találtunk semmit 30 napon belül
+        _lastWorkdayData.value = null to emptyList()
+    }
+
     private val _selectedDate = MutableStateFlow(getStartOfDay(Date()))
 
     val selectedDayEntries: StateFlow<List<NumberEntry>> = _selectedDate.flatMapLatest { date ->
@@ -40,7 +107,7 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
         dao.getEntriesForDay(startOfDay, endOfDay)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // --- ÚJ HAVI NÉZET --- //
+    // --- HAVI NÉZET --- //
     private val _selectedMonth = MutableStateFlow(Calendar.getInstance())
 
     val monthlyChartData: StateFlow<List<MonthlyChartData>> = _selectedMonth.flatMapLatest { cal ->
@@ -145,6 +212,8 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
                     }
                 }
             }
+            // Újra betöltjük az utolsó munkanap adatait
+            loadLastWorkdayData()
         }
     }
 
@@ -167,6 +236,76 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             set(Calendar.MILLISECOND, 999)
         }.time
     }
+
+    // Export minden adat CSV-be - JAVÍTOTT
+    suspend fun exportAllDataToCSV(): String {
+        val stringBuilder = StringBuilder()
+
+        // CSV fejléc
+        stringBuilder.appendLine("id,érték,kategória,dátum")
+
+        // Adatok gyűjtése - first() használata a Flow-ból egyszer lekérdezni
+        val entries = dao.getAllEntries()
+        val entryList = entries.first()  // ← JAVÍTÁS: first() használata
+
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
+        entryList.forEach { entry ->
+            val formattedDate = dateFormat.format(entry.timestamp)
+            stringBuilder.appendLine("${entry.id},${entry.value},${entry.categoryName},$formattedDate")
+        }
+
+        return stringBuilder.toString()
+    }
+
+    // Import CSV adatok
+    suspend fun importDataFromCSV(csvContent: String): Result<Int> {
+        return try {
+            val lines = csvContent.trim().lines()
+
+            // Ellenőrizzük a fejlécet
+            if (lines.isEmpty() || !lines[0].contains("érték")) {
+                return Result.failure(Exception("Hibás CSV formátum!"))
+            }
+
+            var importedCount = 0
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
+            // Minden adat törlése import előtt
+            dao.deleteAll()
+
+            // Adatok beolvasása (első sor = fejléc, azt kihagyjuk)
+            lines.drop(1).forEach { line ->
+                if (line.isNotBlank()) {
+                    val parts = line.split(",")
+                    if (parts.size >= 4) {
+                        val value = parts[1].toIntOrNull() ?: 0
+                        val categoryName = parts[2]
+                        val timestamp = try {
+                            dateFormat.parse(parts[3]) ?: Date()
+                        } catch (e: Exception) {
+                            Date()
+                        }
+
+                        val entry = NumberEntry(
+                            value = value,
+                            categoryName = categoryName,
+                            timestamp = timestamp
+                        )
+                        dao.insert(entry)
+                        importedCount++
+                    }
+                }
+            }
+
+            // Újra betöltjük az utolsó munkanap adatait
+            loadLastWorkdayData()
+
+            Result.success(importedCount)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
 
 class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
@@ -179,3 +318,4 @@ class MainViewModelFactory(private val application: Application) : ViewModelProv
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
+
