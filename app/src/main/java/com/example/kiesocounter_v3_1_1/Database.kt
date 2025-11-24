@@ -57,6 +57,13 @@ interface NumberEntryDao {
 
     @Query("DELETE FROM number_entries")
     suspend fun deleteAll()
+
+    @Query("""
+    SELECT DISTINCT date(timestamp / 1000, 'unixepoch', 'localtime') as date 
+    FROM number_entries 
+    WHERE strftime('%Y-%m', date(timestamp / 1000, 'unixepoch', 'localtime')) = :yearMonth
+""")
+    suspend fun getDaysWithDataInMonth(yearMonth: String): List<String>
 }
 
 @Database(entities = [NumberEntry::class], version = 1, exportSchema = false)

@@ -17,6 +17,8 @@ import java.util.Calendar
 import java.util.Date
 import java.text.SimpleDateFormat  // ← ÚJ
 import java.util.Locale            // ← ÚJ
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.random.Random
 
 
@@ -25,7 +27,9 @@ import kotlin.random.Random
 data class MonthlyChartData(val dayOfMonth: Int, val categoryTotals: Map<String, Int>)
 
 open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
-
+    // Napok ahol van adat (LocalDate Set)
+    private val _daysWithData = MutableStateFlow<Set<LocalDate>>(emptySet())
+    val daysWithData: StateFlow<Set<LocalDate>> = _daysWithData.asStateFlow()
     val todayEntries: StateFlow<List<NumberEntry>> = dao.getEntriesForDay(getStartOfDay(Date()), getEndOfDay(Date()))
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -137,6 +141,29 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
         calendar.set(Calendar.YEAR, year)
         calendar.set(Calendar.MONTH, month)
         _selectedMonth.value = calendar
+    }
+    // Napok betöltése ahol van adat egy adott hónapban
+    fun loadDaysWithDataForMonth(year: Int, month: Int) {
+        viewModelScope.launch {
+            try {
+                // Formátum: "2024-11"
+                val yearMonth = String.format("%04d-%02d", year, month + 1)
+                val daysStrings = dao.getDaysWithDataInMonth(yearMonth)
+
+                // String dátumokat LocalDate-té alakítjuk
+                val localDates = daysStrings.mapNotNull { dateString ->
+                    try {
+                        LocalDate.parse(dateString) // "2024-11-23" -> LocalDate
+                    } catch (e: Exception) {
+                        null
+                    }
+                }.toSet()
+
+                _daysWithData.value = localDates
+            } catch (e: Exception) {
+                _daysWithData.value = emptySet()
+            }
+        }
     }
     // --- HAVI NÉZET VÉGE ---
 

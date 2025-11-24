@@ -65,6 +65,9 @@ dependencies {
     implementation(libs.vico.compose)
     implementation(libs.vico.core)
 
+    // Compose Calendar  ← ÚJ
+    implementation(libs.compose.calendar)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -72,4 +75,7 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+
+
+
 }

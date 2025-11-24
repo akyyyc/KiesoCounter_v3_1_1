@@ -60,6 +60,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -436,18 +438,39 @@ fun EditScreen(navController: NavController, viewModel: MainViewModel, categoryN
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
-    val datePickerState = rememberDatePickerState()
     val selectedDateEntries by viewModel.selectedDayEntries.collectAsState()
-    var lastWorkdayEntries by remember { mutableStateOf<List<NumberEntry>>(emptyList()) }  // ← ÚJ
-    val scope = rememberCoroutineScope()  // ← ÚJ
+    val daysWithData by viewModel.daysWithData.collectAsState()
+    var lastWorkdayEntries by remember { mutableStateOf<List<NumberEntry>>(emptyList()) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(datePickerState.selectedDateMillis) {
-        viewModel.loadEntriesForSelectedDate(datePickerState.selectedDateMillis)
+    // Naptár állapot
+    val calendarState = io.github.boguszpawlowski.composecalendar.rememberSelectableCalendarState(
+        initialMonth = java.time.YearMonth.now(),
+        initialSelection = listOf(LocalDate.now())
+    )
 
-        // Betöltjük az előző munkanap adatait is  ← ÚJ
-        datePickerState.selectedDateMillis?.let { millis ->
+    // Kiválasztott dátum lekérése
+    val selectedDate = calendarState.selectionState.selection.firstOrNull()
+
+    // Betöltjük a napokat ahol van adat az aktuális hónapban
+    LaunchedEffect(calendarState.monthState.currentMonth) {
+        val yearMonth = calendarState.monthState.currentMonth
+        viewModel.loadDaysWithDataForMonth(
+            yearMonth.year,
+            yearMonth.monthValue - 1  // Calendar.MONTH 0-indexed
+        )
+    }
+
+    // Amikor kiválasztunk egy napot, betöltjük az adatokat
+    LaunchedEffect(selectedDate) {
+        selectedDate?.let { date ->
+            val millis = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            viewModel.loadEntriesForSelectedDate(millis)
+
+            // Előző munkanap adatai
             scope.launch {
-                lastWorkdayEntries = viewModel.getLastWorkdayBeforeDate(Date(millis))
+                val javaDate = Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant())
+                lastWorkdayEntries = viewModel.getLastWorkdayBeforeDate(javaDate)
             }
         }
     }
@@ -464,28 +487,108 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())) {
-            DatePicker(state = datePickerState)
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+        ) {
+            // ComposeCalendar
+            io.github.boguszpawlowski.composecalendar.SelectableCalendar(
+                modifier = Modifier.fillMaxWidth(),
+                firstDayOfWeek = java.time.DayOfWeek.MONDAY,
+                calendarState = calendarState,
+                monthHeader = { monthState ->
+                    // Hónap navigáció
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = {
+                            calendarState.monthState.currentMonth =
+                                calendarState.monthState.currentMonth.minusMonths(1)
+                        }) {
+                            Text("<", style = MaterialTheme.typography.headlineSmall)
+                        }
 
-            datePickerState.selectedDateMillis?.let { millis ->
-                val formattedDate = SimpleDateFormat("yyyy.MM.dd.", Locale.getDefault()).format(Date(millis))
+                        Text(
+                            text = "${monthState.currentMonth.month.name} ${monthState.currentMonth.year}",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+
+                        IconButton(onClick = {
+                            calendarState.monthState.currentMonth =
+                                calendarState.monthState.currentMonth.plusMonths(1)
+                        }) {
+                            Text(">", style = MaterialTheme.typography.headlineSmall)
+                        }
+                    }
+                },
+                dayContent = { dayState ->
+                    // Egyedi nap megjelenítés
+                    val hasData = daysWithData.contains(dayState.date)
+                    val isSelected = dayState.isFromCurrentMonth &&
+                            dayState.date == selectedDate
+
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .padding(2.dp)
+                            .clickable(enabled = dayState.isFromCurrentMonth) {  // ← ÚJ: Kattintható!
+                                calendarState.selectionState.selection = listOf(dayState.date)
+                            }
+                            .background(
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                } else {
+                                    Color.Transparent
+                                },
+                                shape = RoundedCornerShape(8.dp)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = dayState.date.dayOfMonth.toString(),
+                            fontWeight = if (hasData) FontWeight.Bold else FontWeight.Normal,
+                            color = when {
+                                !dayState.isFromCurrentMonth -> Color.Gray
+                                hasData -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurface
+                            },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            )
+
+            // Kiválasztott nap adatai
+            selectedDate?.let { date ->
+                val formattedDate = SimpleDateFormat("yyyy.MM.dd.", Locale.getDefault())
+                    .format(Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant()))
+
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(text = "Adatok a(z) $formattedDate napra:", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = "Adatok a(z) $formattedDate napra:",
+                        style = MaterialTheme.typography.titleMedium
+                    )
                     Spacer(Modifier.height(16.dp))
 
                     if (selectedDateEntries.isEmpty()) {
                         Text("Nincsenek adatok ezen a napon.")
                     } else {
                         CATEGORIES.forEach { categoryName ->
-                            val categoryEntries = selectedDateEntries.filter { it.categoryName == categoryName }
+                            val categoryEntries = selectedDateEntries.filter {
+                                it.categoryName == categoryName
+                            }
                             if (categoryEntries.isNotEmpty()) {
                                 CategoryView(
                                     categoryName = categoryName,
                                     entries = categoryEntries.reversed(),
-                                    lastWorkdayEntries = lastWorkdayEntries,  // ← JAVÍTÁS
-                                    bingoModeEnabled = false,  // ← ezt is add hozzá ha nincs ott
+                                    lastWorkdayEntries = lastWorkdayEntries,
+                                    bingoModeEnabled = false,
                                     onAddClick = {},
-                                    onEditClick = {},  // ← ADD HOZZÁ
+                                    onEditClick = {},
                                     onEntryLongClick = { _ -> }
                                 )
                                 Spacer(Modifier.height(16.dp))
@@ -894,13 +997,16 @@ fun AdminDialog(
     )
 }
 
+// JAVÍTOTT CategoryView - MainActivty.kt-be kerül
+// Cseréld le a meglévő CategoryView függvényt erre!
+
 @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun CategoryView(
     categoryName: String,
     entries: List<NumberEntry>,
     lastWorkdayEntries: List<NumberEntry>,
-    bingoModeEnabled: Boolean = false,  // ← EZT ADD HOZZÁ
+    bingoModeEnabled: Boolean = false,
     onAddClick: () -> Unit,
     onEditClick: () -> Unit,
     onEntryLongClick: (NumberEntry) -> Unit
@@ -923,6 +1029,16 @@ fun CategoryView(
 
     // Különbség megjelenítésének állapota kategóriánként
     var showDifference by remember { mutableStateOf(false) }
+
+    // ÚJ: Számoljuk hányszor szerepel minden szám tegnap
+    val remainingCounts = remember(lastWorkdayNumbers, todayNumbers) {
+        mutableStateMapOf<Int, Int>().apply {
+            // Először összeszámoljuk tegnapi számokat
+            lastWorkdayNumbers.forEach { number ->
+                this[number] = (this[number] ?: 0) + 1
+            }
+        }
+    }
 
     Column {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -969,28 +1085,49 @@ fun CategoryView(
         }
 
         Spacer(Modifier.height(4.dp))
-        // BINGÓ mód - utolsó munkanap számai (ha be van kapcsolva)
+
+        // BINGÓ mód - JAVÍTOTT LOGIKA
         if (bingoModeEnabled && lastWorkdayNumbers.isNotEmpty()) {
             Text(
                 text = "Előző: ",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )
+
+            // ÚJ LOGIKA: Számoljuk hányszor került be már minden szám ma
+            val usedTodayCounts = mutableMapOf<Int, Int>()
+            todayNumbers.forEach { num ->
+                usedTodayCounts[num] = (usedTodayCounts[num] ?: 0) + 1
+            }
+
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                lastWorkdayNumbers.forEach { number ->
-                    val isCommon = todayNumbers.contains(number)
+                // Végigmegyünk a tegnapi számokon SORRENDBEN
+                lastWorkdayNumbers.forEach { yesterdayNumber ->
+                    // Van-e még felhasználható match?
+                    val availableToday = usedTodayCounts[yesterdayNumber] ?: 0
+                    val hasMatch = availableToday > 0
+
+                    // Ha van match, "használjuk fel" egyet
+                    if (hasMatch) {
+                        usedTodayCounts[yesterdayNumber] = availableToday - 1
+                    }
+
                     Text(
-                        text = "$number,",
+                        text = "$yesterdayNumber,",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (isCommon) {
-                            Color(0xFF4CAF50) // Zöld ha közös (BINGÓ!)
+                        color = if (hasMatch) {
+                            Color(0xFF4CAF50) // Zöld ha van match (BINGÓ!)
                         } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f) // Halvány ha nem
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f) // Halvány
                         },
-                        fontWeight = if (isCommon) FontWeight.Bold else FontWeight.Normal
+                        fontWeight = if (hasMatch) {
+                            FontWeight.Bold
+                        } else {
+                            FontWeight.Normal
+                        }
                     )
                 }
             }
@@ -1189,6 +1326,8 @@ class FakeMainViewModel : MainViewModel(dao = object : NumberEntryDao {
     override suspend fun deleteEntriesSince(startOfDay: Date) {}
     override suspend fun deleteAll() {}
     override suspend fun getLastEntry(): NumberEntry? = null
+    override suspend fun getDaysWithDataInMonth(yearMonth: String): List<String> = emptyList()  // ← ÚJ SOR
+
 })
 
 @Preview(showBackground = true)

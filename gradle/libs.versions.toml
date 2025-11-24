@@ -9,6 +9,7 @@ espressoCore = "3.5.1"
 lifecycleRuntimeKtx = "2.6.1"
 activityCompose = "1.8.0"
 composeBom = "2024.09.00"
+compose-calendar = "1.1.1"
 navigation = "2.7.7"
 room = "2.7.0-alpha03" # ez az első, ami már 2.0-s Kotlinnal működik!
 vico = "1.13.1"
@@ -41,6 +42,9 @@ androidx-material-icons-extended = { group = "androidx.compose.material", name =
 # Vico Chart Library
 vico-compose = { group = "com.patrykandpatrick.vico", name = "compose", version.ref = "vico" }
 vico-core = { group = "com.patrykandpatrick.vico", name = "core", version.ref = "vico" }
+
+compose-calendar = { group = "io.github.boguszpawlowski.composecalendar", name = "composecalendar", version.ref = "compose-calendar" }
+
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
