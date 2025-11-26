@@ -637,6 +637,97 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             loadEgyebEntriesByGroup()
         }
     }
+
+    // ========== MULTI-SELECT ÉS ÁTHELYEZÉS ==========
+
+    /**
+     * Visszaadja az összes elérhető kategóriát (CATEGORIES listából, kivéve Egyéb)
+     */
+    fun getAvailableCategories(): List<String> {
+        return CATEGORIES.filter { it != "Egyéb" }
+    }
+
+    /**
+     * Számok áthelyezése csoportból kategóriába (multi-select)
+     * @param entryIds - Kijelölt entry ID-k
+     * @param targetCategory - Célkategória neve
+     */
+    suspend fun moveEntriesToCategory(entryIds: Set<Int>, targetCategory: String) {
+        // DEBUG: Mit kaptunk paraméterként?
+        android.util.Log.d("MoveEntries", "========== ÁTHELYEZÉS KEZDÉS ==========")
+        android.util.Log.d("MoveEntries", "entryIds paraméter: $entryIds")
+        android.util.Log.d("MoveEntries", "targetCategory: $targetCategory")
+
+        // Először lekérjük az ÖSSZES entry-t a DAO-ból
+        val allCurrentEntries = dao.getAllEntries().first()
+        android.util.Log.d("MoveEntries", "Összes entry a DB-ből: ${allCurrentEntries.size} db")
+        android.util.Log.d("MoveEntries", "DB entry ID-k: ${allCurrentEntries.map { it.id }}")
+
+        // Konvertáljuk az entryIds-t Long típusúra
+        val entryIdsAsLong = entryIds.map { it.toLong() }.toSet()
+        android.util.Log.d("MoveEntries", "entryIds Long-ként: $entryIdsAsLong")
+
+        var movedCount = 0
+        entryIdsAsLong.forEach { entryId ->
+            android.util.Log.d("MoveEntries", "Keresés: ID = $entryId")
+
+            // Keressük meg az entryt ID alapján
+            val entry = allCurrentEntries.find { it.id == entryId }
+
+            if (entry != null) {
+                android.util.Log.d("MoveEntries", "TALÁLT entry: id=${entry.id}, value=${entry.value}, category=${entry.categoryName}")
+
+                // Új entry létrehozása a célkategóriában
+                val movedEntry = entry.copy(
+                    id = 0,  // Új ID generálása
+                    categoryName = targetCategory,
+                    subCategory = null,
+                    movedFromGroup = true
+                )
+
+                dao.insert(movedEntry)
+                android.util.Log.d("MoveEntries", "ÚJ entry beszúrva: $targetCategory kategóriába")
+
+                // Régi entry törlése
+                dao.delete(entry)
+                android.util.Log.d("MoveEntries", "RÉGI entry törölve")
+
+                movedCount++
+            } else {
+                android.util.Log.e("MoveEntries", "NEM TALÁLT entry ID-val: $entryId")
+            }
+        }
+
+        android.util.Log.d("MoveEntries", "Összesen áthelyezve: $movedCount db")
+        android.util.Log.d("MoveEntries", "========== ÁTHELYEZÉS VÉGE ==========")
+
+        // UI frissítése
+        loadEgyebEntriesByGroup()
+        reloadSelectedDayEntries()
+    }
+
+    /**
+     * Egyetlen szám áthelyezése csoportból kategóriába (drag & drop - később)
+     * @param entry - Az entry amit áthelyezünk
+     * @param targetCategory - Célkategória neve
+     */
+    suspend fun moveSingleEntryToCategory(entry: NumberEntry, targetCategory: String) {
+        // Új entry létrehozása a célkategóriában
+        val movedEntry = entry.copy(
+            id = 0,
+            categoryName = targetCategory,
+            subCategory = null,
+            movedFromGroup = true  // ← SÁRGA JELÖLÉS!
+        )
+        dao.insert(movedEntry)
+
+        // Régi entry törlése
+        dao.delete(entry)
+
+        // UI frissítése
+        loadEgyebEntriesByGroup()
+        reloadSelectedDayEntries()
+    }
     // ========== EXCEL EXPORT/IMPORT ==========
 
     suspend fun exportAllDataToExcel(outputStream: java.io.OutputStream): Result<Int> {

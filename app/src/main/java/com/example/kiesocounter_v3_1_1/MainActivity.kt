@@ -8,25 +8,32 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border  // ← ÚJ!
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape  // ← ÚJ!
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.CheckBox          // ← ÚJ!
+import androidx.compose.material.icons.filled.Close            // ← ÚJ!
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Delete           // ← ÚJ!
+import androidx.compose.material.icons.filled.DriveFileMove   // ← ÚJ!
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip                            // ← ÚJ!
 import androidx.compose.ui.unit.offset
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -347,7 +354,8 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                                 },
                                 onDeleteAllGroups = {  // ← ÚJ!
                                     showDeleteAllGroupsDialog = true
-                                }
+                                },
+                                viewModel = viewModel  // ← ÚJ!
                             )
                         } else {
                             // Normál kategória megjelenítés
@@ -937,7 +945,9 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                                         } else {
                                             {}
                                         },
-                                        onDeleteAllGroups = {}  // Továbbra is disabled
+                                        onDeleteAllGroups = {},
+                                        viewModel = viewModel  // ← ÚJ!
+// Továbbra is disabled
                                     )
                                 } else {
                                     // Normál kategóriák
@@ -1637,8 +1647,9 @@ fun CategoryViewEgyeb(
     onAddToGroup: (String) -> Unit,
     onEditClick: () -> Unit,
     onEntryLongClick: (NumberEntry) -> Unit,
-    onEditGroup: (String) -> Unit,  // ← ÚJ!
-    onDeleteAllGroups: () -> Unit   // ← ÚJ!
+    onEditGroup: (String) -> Unit,
+    onDeleteAllGroups: () -> Unit,
+    viewModel: MainViewModel  // ← ÚJ!
 ) {
     // Csoportok nélküli számok
     val ungroupedEntries = entries.filter { it.subCategory == null }
@@ -1702,94 +1713,19 @@ fun CategoryViewEgyeb(
                 Text("+ Új csoport létrehozása")
             }
         } else {
-            // Csoportok megjelenítése
+            // ========== CSOPORTOK MEGJELENÍTÉSE ==========
             groups.forEach { groupName ->
-                val groupEntries = (groupedEntries[groupName] ?: emptyList())
-                    .filter { it.value > 0 }  // ← ÚJ! 0-ás kiszűrése
-                val groupTotal = groupEntries.sumOf { it.value }
+                EgyebGroupCard(
+                    groupName = groupName,
+                    entries = groupedEntries[groupName] ?: emptyList(),
+                    onAddToGroup = { onAddToGroup(groupName) },
+                    onEditGroup = { onEditGroup(groupName) },
+                    onEntryLongClick = onEntryLongClick,
+                    viewModel = viewModel,  // ← ÚJ!
+                    context = LocalContext.current  // ← ÚJ!
+                )
 
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        // Csoport fejléc
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .combinedClickable(
-                                    onClick = {},
-                                    onLongClick = { onEditGroup(groupName) }  // ← ÚJ!
-                                ),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "🏷️ $groupName",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            Button(
-                                onClick = { onAddToGroup(groupName) },
-                                modifier = Modifier.size(32.dp),
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text("+", fontSize = 18.sp)
-                            }
-                        }
-
-                        Spacer(Modifier.height(4.dp))
-
-                        // Számok
-                        if (groupEntries.isEmpty()) {
-                            Text(
-                                "Nincsenek számok",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                groupEntries.reversed().forEach { entry ->
-                                    Box(
-                                        modifier = Modifier
-                                            .combinedClickable(
-                                                onClick = {},
-                                                onLongClick = { onEntryLongClick(entry) }
-                                            )
-                                            .padding(horizontal = 4.dp)
-                                    ) {
-                                        Text(
-                                            text = "${entry.value},",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = if (entry.movedFrom != null) {
-                                                Color(0xFFFFB300) // Sárga = átmozgatott
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurface
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Összesen: $groupTotal db",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(8.dp))
             }
 
             // Új csoport gomb
@@ -1802,7 +1738,7 @@ fun CategoryViewEgyeb(
 
             Spacer(Modifier.height(4.dp))
 
-// Minden csoport törlése gomb
+            // Minden csoport törlése gomb
             if (groups.isNotEmpty()) {
                 Button(
                     onClick = onDeleteAllGroups,
@@ -1903,6 +1839,356 @@ fun CategoryViewEgyeb(
         )
     }
 }
+
+// ========== ÚJ COMPOSABLE: EGYÉB GROUP CARD MULTI-SELECT GOMBOKKAL ==========
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
+@Composable
+fun EgyebGroupCard(
+    groupName: String,
+    entries: List<NumberEntry>,
+    onAddToGroup: () -> Unit,
+    onEditGroup: () -> Unit,
+    onEntryLongClick: (NumberEntry) -> Unit,
+    viewModel: MainViewModel,  // ← ÚJ!
+    context: android.content.Context  // ← ÚJ!
+) {
+    // ========== STATE ==========
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedEntryIds by remember { mutableStateOf(setOf<Int>()) }
+    var showMoveToCategoryDialog by remember { mutableStateOf(false) }  // ← ÚJ!
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }   // ← ÚJ!
+
+    val scope = rememberCoroutineScope()  // ← ÚJ!
+
+    // Kijelölés megszüntetése, ha üres
+    LaunchedEffect(selectedEntryIds.size) {
+        if (selectedEntryIds.isEmpty() && isSelectionMode) {
+            isSelectionMode = false
+        }
+    }
+
+    // 0-ás értékek kiszűrése
+    val filteredEntries = entries.filter { it.value > 0 }
+    val groupTotal = filteredEntries.sumOf { it.value }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // ========== FEJLÉC ==========
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { onEditGroup() }
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Bal oldal - Cím
+                Text(
+                    text = "🏷️ $groupName",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Jobb oldal - Gombok (40dp méret!)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (isSelectionMode) {
+                        // ========== KIJELÖLÉS AKTÍV ==========
+
+                        // 1. Bezárás gomb (X)
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.errorContainer)
+                                .clickable {
+                                    isSelectionMode = false
+                                    selectedEntryIds = setOf()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Kijelölés vége",
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // 2. Áthelyezés gomb
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (selectedEntryIds.isNotEmpty())
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    else
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                .clickable(enabled = selectedEntryIds.isNotEmpty()) {
+                                    // ========== ÁTHELYEZÉS DIALÓGUS MEGNYITÁSA ==========
+                                    scope.launch {
+                                        showMoveToCategoryDialog = true
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DriveFileMove,
+                                contentDescription = "Áthelyezés kategóriába",
+                                tint = if (selectedEntryIds.isNotEmpty())
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // 3. Törlés gomb
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (selectedEntryIds.isNotEmpty())
+                                        MaterialTheme.colorScheme.errorContainer
+                                    else
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                .clickable(enabled = selectedEntryIds.isNotEmpty()) {
+                                    // ========== TÖRLÉS MEGERŐSÍTŐ DIALÓGUS ==========
+                                    showDeleteConfirmDialog = true
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Kijelöltek törlése",
+                                tint = if (selectedEntryIds.isNotEmpty())
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                    } else {
+                        // ========== NORMÁL MÓD ==========
+
+                        // 1. Multi-select aktiváló gomb
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer)
+                                .clickable {
+                                    isSelectionMode = true
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckBox,
+                                contentDescription = "Kijelölés",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // 2. Hozzáadás gomb
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF4CAF50).copy(alpha = 0.2f))
+                                .clickable { onAddToGroup() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "+",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF4CAF50)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // ========== SZÁMOK GRID - TISZTA VERZIÓ ==========
+            if (filteredEntries.isEmpty()) {
+                Text(
+                    "Nincsenek számok",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    filteredEntries.reversed().forEach { entry ->
+                        val isSelected = selectedEntryIds.contains(entry.id.toInt())
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(
+                                    width = if (isSelected) 2.dp else 0.dp,
+                                    color = if (isSelected)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .background(
+                                    when {
+                                        entry.movedFromGroup -> Color(0xFFFFC107).copy(alpha = 0.15f)
+                                        else -> Color.Transparent
+                                    }
+                                )
+                                .combinedClickable(
+                                    onClick = {
+                                        if (isSelectionMode) {
+                                            selectedEntryIds = if (isSelected) {
+                                                selectedEntryIds - entry.id.toInt()
+                                            } else {
+                                                selectedEntryIds + entry.id.toInt()
+                                            }
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (!isSelectionMode) {
+                                            onEntryLongClick(entry)
+                                        }
+                                    }
+                                )
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "${entry.value},",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (entry.movedFromGroup) {
+                                    Color(0xFFF57C00)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Összesen: $groupTotal db",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+    // ========== ÁTHELYEZÉS KATEGÓRIÁBA DIALÓGUS ==========
+    if (showMoveToCategoryDialog) {
+        val availableCategories = viewModel.getAvailableCategories()
+
+        AlertDialog(
+            onDismissRequest = { showMoveToCategoryDialog = false },
+            title = { Text("Áthelyezés kategóriába") },
+            text = {
+                Column {
+                    Text(
+                        "${selectedEntryIds.size} szám kijelölve",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text("Válassz kategóriát:", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+
+                    availableCategories.forEach { category ->
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    viewModel.moveEntriesToCategory(selectedEntryIds, category)
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "${selectedEntryIds.size} szám áthelyezve: $category",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                selectedEntryIds = setOf()
+                                isSelectionMode = false
+                                showMoveToCategoryDialog = false
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text(category)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showMoveToCategoryDialog = false }) {
+                    Text("Mégse")
+                }
+            }
+        )
+    }
+
+    // ========== TÖRLÉS MEGERŐSÍTŐ DIALÓGUS ==========
+    if (showDeleteConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            title = { Text("Számok törlése") },
+            text = {
+                Text("Biztosan törölni szeretnéd a kijelölt ${selectedEntryIds.size} számot?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            selectedEntryIds.forEach { entryId ->
+                                val entry = entries.find { it.id.toInt() == entryId }
+                                entry?.let { viewModel.deleteEntry(it) }
+                            }
+                            android.widget.Toast.makeText(
+                                context,
+                                "${selectedEntryIds.size} szám törölve",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        selectedEntryIds = setOf()
+                        isSelectionMode = false
+                        showDeleteConfirmDialog = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = Color.Red
+                    )
+                ) {
+                    Text("Törlés")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("Mégse")
+                }
+            }
+        )
+    }
+}
+
 
 @Composable
 fun EditEntryDialog(entry: NumberEntry, onDismissRequest: () -> Unit, onModify: (NumberEntry) -> Unit, onDelete: (NumberEntry) -> Unit) {

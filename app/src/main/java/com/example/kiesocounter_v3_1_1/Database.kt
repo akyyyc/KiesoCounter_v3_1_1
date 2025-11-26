@@ -27,6 +27,7 @@ data class NumberEntry(
     val categoryName: String,
     val subCategory: String? = null,
     val movedFrom: String? = null,
+    val movedFromGroup: Boolean = false,  // ← ÚJ MEZŐ!
     val timestamp: Date
 )
 
@@ -73,9 +74,11 @@ interface NumberEntryDao {
     suspend fun getSubCategoriesForEgyeb(): List<String>
 }
 
+// ========== MÓDOSÍTVA: Version 4 → 5, MIGRATION_4_5 hozzáadva ==========
+
 @Database(
     entities = [NumberEntry::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -131,7 +134,13 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL("DROP TABLE IF EXISTS egyeb_groups")
             }
         }
-
+        // ========== ÚJ MIGRATION 4 → 5 ==========
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // movedFromGroup mező hozzáadása, alapértelmezett = 0 (false)
+                database.execSQL("ALTER TABLE number_entries ADD COLUMN movedFromGroup INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -139,7 +148,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "kieso_counter_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    // ========== MIGRATION_4_5 hozzáadva a listához ==========
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                 INSTANCE = instance
                 instance
