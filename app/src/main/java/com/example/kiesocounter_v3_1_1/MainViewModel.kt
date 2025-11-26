@@ -363,7 +363,7 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
 
     suspend fun exportAllDataToCSV(): String {
         val stringBuilder = StringBuilder()
-        stringBuilder.appendLine("id,érték,kategória,dátum")
+        stringBuilder.appendLine("id,érték,kategória,csoport,dátum")  // ← ÚJ: csoport oszlop!
 
         val entries = dao.getAllEntries()
         val entryList = entries.first()
@@ -372,7 +372,8 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
 
         entryList.forEach { entry ->
             val formattedDate = dateFormat.format(entry.timestamp)
-            stringBuilder.appendLine("${entry.id},${entry.value},${entry.categoryName},$formattedDate")
+            val subCategory = entry.subCategory ?: ""  // ← ÚJ: Ha nincs csoport, üres string
+            stringBuilder.appendLine("${entry.id},${entry.value},${entry.categoryName},$subCategory,$formattedDate")
         }
 
         return stringBuilder.toString()
@@ -394,11 +395,20 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             lines.drop(1).forEach { line ->
                 if (line.isNotBlank()) {
                     val parts = line.split(",")
-                    if (parts.size >= 4) {
+                    if (parts.size >= 4) {  // ← Minimum 4 mező kell (id, érték, kategória, dátum)
                         val value = parts[1].toIntOrNull() ?: 0
                         val categoryName = parts[2]
+
+                        // ÚJ: Csoport kezelése (ha van 5. oszlop)
+                        val subCategory = if (parts.size >= 5 && parts[3].isNotBlank()) {
+                            parts[3]
+                        } else {
+                            null
+                        }
+
+                        // Dátum az utolsó oszlopban
                         val timestamp = try {
-                            dateFormat.parse(parts[3]) ?: Date()
+                            dateFormat.parse(parts.last()) ?: Date()
                         } catch (e: Exception) {
                             Date()
                         }
@@ -407,7 +417,7 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
                             id = 0,
                             value = value,
                             categoryName = categoryName,
-                            subCategory = null,
+                            subCategory = subCategory,  // ← ÚJ!
                             movedFrom = null,
                             timestamp = timestamp
                         )
@@ -625,6 +635,122 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             }
 
             loadEgyebEntriesByGroup()
+        }
+    }
+    // ========== EXCEL EXPORT/IMPORT ==========
+
+    suspend fun exportAllDataToExcel(outputStream: java.io.OutputStream): Result<Int> {
+        return try {
+            val entries = dao.getAllEntries().first()
+
+            // Workbook létrehozása
+            val workbook = org.apache.poi.xssf.usermodel.XSSFWorkbook()
+            val sheet = workbook.createSheet("Kieső Adatok")
+
+            // Fejléc sor
+            val headerRow = sheet.createRow(0)
+            val headerStyle = workbook.createCellStyle()
+            val headerFont = workbook.createFont()
+            headerFont.bold = true
+            headerStyle.setFont(headerFont)
+
+            headerRow.createCell(0).apply {
+                setCellValue("ID")
+                cellStyle = headerStyle
+            }
+            headerRow.createCell(1).apply {
+                setCellValue("Érték")
+                cellStyle = headerStyle
+            }
+            headerRow.createCell(2).apply {
+                setCellValue("Kategória")
+                cellStyle = headerStyle
+            }
+            headerRow.createCell(3).apply {
+                setCellValue("Csoport")
+                cellStyle = headerStyle
+            }
+            headerRow.createCell(4).apply {
+                setCellValue("Dátum")
+                cellStyle = headerStyle
+            }
+
+            // Dátum formátum
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
+            // Adatok írása
+            entries.forEachIndexed { index, entry ->
+                val row = sheet.createRow(index + 1)
+                row.createCell(0).setCellValue(entry.id.toDouble())
+                row.createCell(1).setCellValue(entry.value.toDouble())
+                row.createCell(2).setCellValue(entry.categoryName)
+                row.createCell(3).setCellValue(entry.subCategory ?: "")
+                row.createCell(4).setCellValue(dateFormat.format(entry.timestamp))
+            }
+
+            // ✅ JAVÍTVA: Oszlopszélesség MANUÁLISAN (AWT nélkül!)
+            sheet.setColumnWidth(0, 10 * 256)  // ID - 10 karakter széles
+            sheet.setColumnWidth(1, 10 * 256)  // Érték - 10 karakter
+            sheet.setColumnWidth(2, 25 * 256)  // Kategória - 25 karakter
+            sheet.setColumnWidth(3, 20 * 256)  // Csoport - 20 karakter
+            sheet.setColumnWidth(4, 20 * 256)  // Dátum - 20 karakter
+
+            // Fájl írása
+            workbook.write(outputStream)
+            workbook.close()
+
+            Result.success(entries.size)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun importDataFromExcel(inputStream: java.io.InputStream): Result<Int> {
+        return try {
+            var importedCount = 0
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
+            val workbook = org.apache.poi.xssf.usermodel.XSSFWorkbook(inputStream)
+            val sheet = workbook.getSheetAt(0)
+
+            dao.deleteAll()
+
+            // Első sor a fejléc, kihagyjuk
+            for (i in 1 until sheet.physicalNumberOfRows) {
+                val row = sheet.getRow(i) ?: continue
+
+                val value = row.getCell(1)?.numericCellValue?.toInt() ?: 0
+                val categoryName = row.getCell(2)?.stringCellValue ?: ""
+                val subCategory = row.getCell(3)?.stringCellValue?.takeIf { it.isNotBlank() }
+                val dateString = row.getCell(4)?.stringCellValue ?: ""
+
+                val timestamp = try {
+                    dateFormat.parse(dateString) ?: Date()
+                } catch (e: Exception) {
+                    Date()
+                }
+
+                val entry = NumberEntry(
+                    id = 0,
+                    value = value,
+                    categoryName = categoryName,
+                    subCategory = subCategory,
+                    movedFrom = null,
+                    timestamp = timestamp
+                )
+                dao.insert(entry)
+                importedCount++
+            }
+
+            workbook.close()
+
+            loadLastWorkdayData()
+            loadEgyebEntriesByGroup()
+            delay(100)
+
+            Result.success(importedCount)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 }

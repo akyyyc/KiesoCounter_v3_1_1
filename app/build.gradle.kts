@@ -11,12 +11,13 @@ android {
 
     defaultConfig {
         applicationId = "com.example.kiesocounter_v3_1_1"
-        minSdk = 24
-        targetSdk = 24
+        minSdk = 26
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -28,13 +29,36 @@ android {
             )
         }
     }
+
+    // ← ÚJ! Packaging options
+    packagingOptions {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/license.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/notice.txt",
+                "META-INF/ASL2.0",
+                "META-INF/*.kotlin_module"
+            )
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
+
+        // ← ÚJ! Desugaring
+        isCoreLibraryDesugaringEnabled = true
     }
+
     kotlinOptions {
         jvmTarget = "1.8"
     }
+
     buildFeatures {
         compose = true
     }
@@ -65,8 +89,18 @@ dependencies {
     implementation(libs.vico.compose)
     implementation(libs.vico.core)
 
-    // Compose Calendar  ← ÚJ
+    // Compose Calendar
     implementation(libs.compose.calendar)
+
+    // Apache POI - Excel kezelés
+    implementation("org.apache.poi:poi:5.2.3")
+    implementation("org.apache.poi:poi-ooxml:5.2.3")
+
+    // Multidex support
+    implementation("androidx.multidex:multidex:2.0.1")
+
+    // Desugaring library
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -75,7 +109,4 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-
-
-
 }

@@ -144,8 +144,10 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // Export launcher - fájl mentés
-    val exportLauncher = rememberLauncherForActivityResult(
+
+
+    // ========== CSV EXPORT/IMPORT ==========
+    val exportCsvLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
     ) { uri ->
         uri?.let {
@@ -157,14 +159,13 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                     }
                     showExportSuccess = true
                 } catch (e: Exception) {
-                    showError = "Export hiba: ${e.message}"
+                    showError = "CSV export hiba: ${e.message}"
                 }
             }
         }
     }
 
-    // Import launcher - fájl betöltés
-    val importLauncher = rememberLauncherForActivityResult(
+    val importCsvLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
@@ -178,10 +179,53 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                     result.onSuccess { count ->
                         showImportSuccess = count
                     }.onFailure { error ->
-                        showError = "Import hiba: ${error.message}"
+                        showError = "CSV import hiba: ${error.message}"
                     }
                 } catch (e: Exception) {
-                    showError = "Import hiba: ${e.message}"
+                    showError = "CSV import hiba: ${e.message}"
+                }
+            }
+        }
+    }
+
+// ========== EXCEL EXPORT/IMPORT ==========
+    val exportExcelLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                        val result = viewModel.exportAllDataToExcel(outputStream)
+                        result.onSuccess {
+                            showExportSuccess = true
+                        }.onFailure { error ->
+                            showError = "Excel export hiba: ${error.message}"
+                        }
+                    }
+                } catch (e: Exception) {
+                    showError = "Excel export hiba: ${e.message}"
+                }
+            }
+        }
+    }
+
+    val importExcelLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    context.contentResolver.openInputStream(it)?.use { inputStream ->
+                        val result = viewModel.importDataFromExcel(inputStream)
+                        result.onSuccess { count ->
+                            showImportSuccess = count
+                        }.onFailure { error ->
+                            showError = "Excel import hiba: ${error.message}"
+                        }
+                    }
+                } catch (e: Exception) {
+                    showError = "Excel import hiba: ${e.message}"
                 }
             }
         }
@@ -406,24 +450,32 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             onDeleteToday = { viewModel.deleteTodayEntries(); showAdminDialog = false },
             onGenerateYesterday = { viewModel.generateTestData(1); showAdminDialog = false },
             onGenerateWeek = { viewModel.generateTestData(7); showAdminDialog = false },
-            onGenerateToday = { viewModel.generateTodayData(); showAdminDialog = false },  // ← ÚJ
+            onGenerateToday = { viewModel.generateTodayData(); showAdminDialog = false },
             onDeleteAll = { viewModel.deleteAllEntries(); showAdminDialog = false },
-            onExportData = {
-                exportLauncher.launch("kiesocounter_backup_${System.currentTimeMillis()}.csv")
+            onExportCSV = {  // ← ÚJ!
+                exportCsvLauncher.launch("kiesocounter_backup_${System.currentTimeMillis()}.csv")
                 showAdminDialog = false
             },
-            onImportData = {
-                importLauncher.launch("text/csv")
+            onExportExcel = {  // ← ÚJ!
+                exportExcelLauncher.launch("kiesocounter_backup_${System.currentTimeMillis()}.xlsx")
                 showAdminDialog = false
             },
-            onReloadData = {  // ← ÚJ
+            onImportCSV = {  // ← ÚJ!
+                importCsvLauncher.launch("text/csv")
+                showAdminDialog = false
+            },
+            onImportExcel = {  // ← ÚJ!
+                importExcelLauncher.launch("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                showAdminDialog = false
+            },
+            onReloadData = {
                 scope.launch {
                     viewModel.loadLastWorkdayData()
                 }
                 showAdminDialog = false
             },
-            onToggleDebugMode = { viewModel.toggleDebugMode() },  // ← ÚJ!
-            debugModeEnabled = debugModeEnabled                    // ← ÚJ!
+            onToggleDebugMode = { viewModel.toggleDebugMode() },
+            debugModeEnabled = debugModeEnabled
         )
     }
 
@@ -1223,20 +1275,22 @@ fun AdminDialog(
     onDeleteToday: () -> Unit,
     onGenerateYesterday: () -> Unit,
     onGenerateWeek: () -> Unit,
-    onGenerateToday: () -> Unit = {},  // ← ADD HOZZÁ
+    onGenerateToday: () -> Unit = {},
     onDeleteAll: () -> Unit,
-    onExportData: () -> Unit = {},
-    onImportData: () -> Unit = {},
-    onReloadData: () -> Unit = {},  // ← ÚJ
-    onToggleDebugMode: () -> Unit = {},  // ← ÚJ!
-    debugModeEnabled: Boolean = false    // ← ÚJ!
+    onExportCSV: () -> Unit = {},      // ← ÚJ!
+    onExportExcel: () -> Unit = {},    // ← ÚJ!
+    onImportCSV: () -> Unit = {},      // ← ÚJ!
+    onImportExcel: () -> Unit = {},    // ← ÚJ!
+    onReloadData: () -> Unit = {},
+    onToggleDebugMode: () -> Unit = {},
+    debugModeEnabled: Boolean = false
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text("Admin Funkciók") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                // DEBUG MÓD - LEGELSŐ HELYEN!
+                // DEBUG MÓD
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1272,25 +1326,50 @@ fun AdminDialog(
                 Divider()
                 Spacer(Modifier.height(16.dp))
 
-                // Export/Import szakasz
-                Text("Adatkezelés", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                // ========== EXPORT SZAKASZ ==========
+                Text("📤 Export (Mentés)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
 
                 Button(
-                    onClick = onExportData,
+                    onClick = onExportCSV,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                 ) {
-                    Text("📤 Adatok exportálása (CSV)")
+                    Text("📄 CSV Export (Gyors biztonsági mentés)")
                 }
                 Spacer(Modifier.height(8.dp))
 
                 Button(
-                    onClick = onImportData,
+                    onClick = onExportExcel,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                ) {
+                    Text("📊 Excel Export (Szerkeszthető)")
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Divider()
+                Spacer(Modifier.height(16.dp))
+
+                // ========== IMPORT SZAKASZ ==========
+                Text("📥 Import (Betöltés)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+
+                Button(
+                    onClick = onImportCSV,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
                 ) {
-                    Text("📥 Adatok importálása (CSV)")
+                    Text("📄 CSV Import")
+                }
+                Spacer(Modifier.height(8.dp))
+
+                Button(
+                    onClick = onImportExcel,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+                ) {
+                    Text("📊 Excel Import")
                 }
 
                 Spacer(Modifier.height(8.dp))
@@ -1316,10 +1395,10 @@ fun AdminDialog(
                 }
                 Spacer(Modifier.height(8.dp))
 
-                Button(onClick = onGenerateToday, modifier = Modifier.fillMaxWidth()) {  // ← ÚJ
-                    Text("Mai nap feltöltése (random)")  // ← ÚJ
-                }  // ← ÚJ
-                Spacer(Modifier.height(8.dp))  // ← ÚJ
+                Button(onClick = onGenerateToday, modifier = Modifier.fillMaxWidth()) {
+                    Text("Mai nap feltöltése (random)")
+                }
+                Spacer(Modifier.height(8.dp))
 
                 Button(onClick = onGenerateYesterday, modifier = Modifier.fillMaxWidth()) {
                     Text("Tegnapi nap feltöltése (random)")
