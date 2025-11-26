@@ -132,6 +132,12 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
     var showImportSuccess by remember { mutableStateOf<Int?>(null) }
     var showError by remember { mutableStateOf<String?>(null) }
 
+
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var selectedGroupForAdd by remember { mutableStateOf<String?>(null) }
+    var groupToEdit by remember { mutableStateOf<String?>(null) }  // ← ÚJ!
+    var showDeleteAllGroupsDialog by remember { mutableStateOf(false) }  // ← ÚJ!
+
     val bingoModeEnabled by viewModel.bingoModeEnabled.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -265,21 +271,56 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             }
         ) { padding ->
             Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+                // ÚJ: MainScreen-ben mindig mai napra állítjuk a kontextust
+               // LaunchedEffect(Unit) {
+               //     viewModel.resetContextDate()
+              //  }
                 LazyColumn(modifier = Modifier.weight(1f).padding(16.dp)) {
                     items(CATEGORIES) { categoryName ->
                         val categoryEntries = allEntries.filter { it.categoryName == categoryName }
-                        CategoryView(
-                            categoryName = categoryName,
-                            entries = categoryEntries.reversed(),
-                            lastWorkdayEntries = lastWorkdayEntries,  // ← ÚJ paraméter
-                            bingoModeEnabled = bingoModeEnabled,  // ← ÚJ SOR
-                            onAddClick = { categoryForAddDialog = categoryName },
-                            onEditClick = {
-                                val encodedCategoryName = URLEncoder.encode(categoryName, StandardCharsets.UTF_8.name())
-                                navController.navigate("edit/$encodedCategoryName")
-                            },
-                            onEntryLongClick = { entryToEdit = it }
-                        )
+
+                        if (categoryName == "Egyéb") {
+                            // ÚJ: Speciális megjelenítés az Egyéb kategóriának
+                            val groups by viewModel.egyebSubCategories.collectAsState()
+
+                            CategoryViewEgyeb(
+                                entries = categoryEntries,
+                                groups = groups,
+                                lastWorkdayEntries = lastWorkdayEntries,
+                                bingoModeEnabled = bingoModeEnabled,
+                                onCreateGroup = { showCreateGroupDialog = true },
+                                onAddToGroup = { groupName ->
+                                    selectedGroupForAdd = groupName
+                                    categoryForAddDialog = categoryName
+                                },
+                                onEditClick = {
+                                    val encodedCategoryName = URLEncoder.encode(categoryName, StandardCharsets.UTF_8.name())
+                                    navController.navigate("edit/$encodedCategoryName")
+                                },
+                                onEntryLongClick = { entryToEdit = it },
+                                onEditGroup = { groupName ->  // ← ÚJ!
+                                    groupToEdit = groupName
+                                },
+                                onDeleteAllGroups = {  // ← ÚJ!
+                                    showDeleteAllGroupsDialog = true
+                                }
+                            )
+                        } else {
+                            // Normál kategória megjelenítés
+                            CategoryView(
+                                categoryName = categoryName,
+                                entries = categoryEntries.reversed(),
+                                lastWorkdayEntries = lastWorkdayEntries,
+                                bingoModeEnabled = bingoModeEnabled,
+                                onAddClick = { categoryForAddDialog = categoryName },
+                                onEditClick = {
+                                    val encodedCategoryName = URLEncoder.encode(categoryName, StandardCharsets.UTF_8.name())
+                                    navController.navigate("edit/$encodedCategoryName")
+                                },
+                                onEntryLongClick = { entryToEdit = it }
+                            )
+                        }
+
                         Spacer(Modifier.height(16.dp))
                     }
                 }
@@ -300,15 +341,40 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             smartButtons = viewModel.getTopThreeNumbers(categoryName)
         }
 
+        // ÚJ: Csak az AKTUÁLIS CSOPORT számai (0-ák nélkül!)
+        val currentNumbers = if (categoryName == "Egyéb" && selectedGroupForAdd != null) {
+            allEntries
+                .filter {
+                    it.categoryName == categoryName &&
+                            it.subCategory == selectedGroupForAdd &&
+                            it.value > 0  // ← 0-ák kiszűrése!
+                }
+                .map { it.value }
+        } else {
+            allEntries
+                .filter { it.categoryName == categoryName }
+                .map { it.value }
+        }
+
         AddNumberDialog(
             categoryName = categoryName,
-            currentNumbers = allEntries.filter { it.categoryName == categoryName }.map { it.value },
-            smartButtons = smartButtons,  // ← ÚJ SOR
-            onDismissRequest = { categoryForAddDialog = null },
+            groupName = selectedGroupForAdd,  // ← ÚJ paraméter!
+            currentNumbers = currentNumbers,  // ← Ez a HELYES érték!
+            smartButtons = smartButtons,
+            onDismissRequest = {
+                categoryForAddDialog = null
+                selectedGroupForAdd = null
+            },
             onConfirmation = { number, shouldClose ->
-                viewModel.addEntry(number, categoryName)
+                if (categoryName == "Egyéb" && selectedGroupForAdd != null) {
+                    viewModel.addEntryWithSubCategory(number, categoryName, selectedGroupForAdd)
+                } else {
+                    viewModel.addEntry(number, categoryName)
+                }
+
                 if (shouldClose) {
                     categoryForAddDialog = null
+                    selectedGroupForAdd = null
                 }
             }
         )
@@ -329,6 +395,8 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             onConfirmation = { viewModel.undoLastEntry(); showUndoDialog = false }
         )
     }
+
+    val debugModeEnabled by viewModel.debugModeEnabled.collectAsState()  // ← ÚJ!
 
     // MainScreen-ben az AdminDialog hívásánál add hozzá:
 
@@ -353,7 +421,9 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                     viewModel.loadLastWorkdayData()
                 }
                 showAdminDialog = false
-            }
+            },
+            onToggleDebugMode = { viewModel.toggleDebugMode() },  // ← ÚJ!
+            debugModeEnabled = debugModeEnabled                    // ← ÚJ!
         )
     }
 
@@ -367,6 +437,29 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
         )
     }
 
+    // Csoport létrehozása dialógus
+    if (showCreateGroupDialog) {
+        var previousGroups by remember { mutableStateOf<List<String>>(emptyList()) }
+
+        // Betöltjük az előző nap csoportjait
+        LaunchedEffect(Unit) {
+            previousGroups = viewModel.getPreviousDaySubCategories()
+        }
+
+        CreateGroupDialog(
+            previousGroups = previousGroups,
+            onDismissRequest = { showCreateGroupDialog = false },
+            onCreateGroup = { groupName ->
+                viewModel.createEmptyGroup(groupName)  // ← ÚJ! Egyszerűbb!
+                showCreateGroupDialog = false
+            },
+            onImportGroups = { groupNames ->
+                viewModel.createEmptyGroups(groupNames)  // ← ÚJ! Egyszerűbb!
+                showCreateGroupDialog = false
+            }
+        )
+    }
+
     // Import sikeres
     showImportSuccess?.let { count ->
         AlertDialog(
@@ -374,6 +467,51 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             title = { Text("Sikeres import") },
             text = { Text("$count bejegyzés importálva!") },
             confirmButton = { TextButton(onClick = { showImportSuccess = null }) { Text("OK") } }
+        )
+    }
+
+    // Csoport szerkesztése dialógus
+    groupToEdit?.let { groupName ->
+        EditGroupDialog(
+            groupName = groupName,
+            onDismissRequest = { groupToEdit = null },
+            onRename = { newName ->
+                viewModel.renameSubCategory(groupName, newName)
+                groupToEdit = null
+            },
+            onDelete = {
+                viewModel.deleteGroup(groupName)
+                groupToEdit = null
+            }
+        )
+    }
+
+// Minden csoport törlése megerősítés
+    if (showDeleteAllGroupsDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAllGroupsDialog = false },
+            title = { Text("Minden csoport törlése") },
+            text = {
+                Text("Biztosan törölni szeretnéd az ÖSSZES csoportot az Egyéb kategóriából?\n\nAz összes szám törlődik!")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteAllEgyebGroups()
+                        showDeleteAllGroupsDialog = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = Color.Red
+                    )
+                ) {
+                    Text("Törlés")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAllGroupsDialog = false }) {
+                    Text("Mégse")
+                }
+            }
         )
     }
 
@@ -440,7 +578,17 @@ fun EditScreen(navController: NavController, viewModel: MainViewModel, categoryN
 fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
     val selectedDateEntries by viewModel.selectedDayEntries.collectAsState()
     val daysWithData by viewModel.daysWithData.collectAsState()
+    val debugModeEnabled by viewModel.debugModeEnabled.collectAsState()
+
     var lastWorkdayEntries by remember { mutableStateOf<List<NumberEntry>>(emptyList()) }
+    var entryToEdit by remember { mutableStateOf<NumberEntry?>(null) }
+
+    // ÚJ: Egyéb kategória állapotok
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var selectedGroupForAdd by remember { mutableStateOf<String?>(null) }
+    var categoryForAddDialog by remember { mutableStateOf<String?>(null) }
+    var groupToEdit by remember { mutableStateOf<String?>(null) }
+
     val scope = rememberCoroutineScope()
 
     // Naptár állapot
@@ -457,7 +605,7 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
         val yearMonth = calendarState.monthState.currentMonth
         viewModel.loadDaysWithDataForMonth(
             yearMonth.year,
-            yearMonth.monthValue - 1  // Calendar.MONTH 0-indexed
+            yearMonth.monthValue - 1
         )
     }
 
@@ -465,20 +613,141 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
     LaunchedEffect(selectedDate) {
         selectedDate?.let { date ->
             val millis = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-            viewModel.loadEntriesForSelectedDate(millis)
+            val javaDate = Date(millis)
+
+            // ÚJ SORREND - ELŐSZÖR a selectedDate, UTÁNA a contextDate!
+            viewModel.loadEntriesForSelectedDate(millis)  // ← ELŐSZÖR EZ!
+            viewModel.setContextDate(javaDate)            // ← UTÁNA EZ!
 
             // Előző munkanap adatai
             scope.launch {
-                val javaDate = Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant())
                 lastWorkdayEntries = viewModel.getLastWorkdayBeforeDate(javaDate)
             }
         }
     }
 
+// ÚJ: Amikor elhagyjuk a CalendarScreen-t, reseteljük a kontextust
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.resetContextDate()  // ← ÚJ! Reset mai napra
+        }
+    }
+
+    // ÚJ: Csoportok a kiválasztott naphoz
+    val groups by viewModel.egyebSubCategories.collectAsState()
+
+    // Dialógus a szám szerkesztéséhez
+    entryToEdit?.let { entry ->
+        EditEntryDialog(
+            entry = entry,
+            onDismissRequest = { entryToEdit = null },
+            onModify = { viewModel.updateEntry(it); entryToEdit = null },
+            onDelete = { viewModel.deleteEntry(it); entryToEdit = null }
+        )
+    }
+
+    // ÚJ: Csoport létrehozása dialógus
+    if (showCreateGroupDialog) {
+        var previousGroups by remember { mutableStateOf<List<String>>(emptyList()) }
+
+        LaunchedEffect(Unit) {
+            previousGroups = viewModel.getPreviousDaySubCategories()
+        }
+
+        CreateGroupDialog(
+            previousGroups = previousGroups,
+            onDismissRequest = { showCreateGroupDialog = false },
+            onCreateGroup = { groupName ->
+                viewModel.createEmptyGroup(groupName)
+                showCreateGroupDialog = false
+            },
+            onImportGroups = { groupNames ->
+                viewModel.createEmptyGroups(groupNames)
+                showCreateGroupDialog = false
+            }
+        )
+    }
+
+    // ÚJ: Szám hozzáadása dialógus
+    categoryForAddDialog?.let { categoryName ->
+        var smartButtons by remember { mutableStateOf<List<Int>>(emptyList()) }
+
+        LaunchedEffect(categoryName) {
+            smartButtons = viewModel.getTopThreeNumbers(categoryName)
+        }
+
+        // ÚJ: Csak az AKTUÁLIS CSOPORT számai (0-ák nélkül!)
+        val currentNumbers = if (categoryName == "Egyéb" && selectedGroupForAdd != null) {
+            selectedDateEntries
+                .filter {
+                    it.categoryName == categoryName &&
+                            it.subCategory == selectedGroupForAdd &&
+                            it.value > 0  // ← 0-ák kiszűrése!
+                }
+                .map { it.value }
+        } else {
+            selectedDateEntries
+                .filter { it.categoryName == categoryName }
+                .map { it.value }
+        }
+
+        AddNumberDialog(
+            categoryName = categoryName,
+            groupName = selectedGroupForAdd,  // ← ÚJ paraméter!
+            currentNumbers = currentNumbers,  // ← Ez a HELYES érték!
+            smartButtons = smartButtons,
+            onDismissRequest = {
+                categoryForAddDialog = null
+                selectedGroupForAdd = null
+            },
+            onConfirmation = { number, shouldClose ->
+                if (categoryName == "Egyéb" && selectedGroupForAdd != null) {
+                    viewModel.addEntryWithSubCategory(number, categoryName, selectedGroupForAdd)
+                } else {
+                    viewModel.addEntry(number, categoryName)
+                }
+
+                if (shouldClose) {
+                    categoryForAddDialog = null
+                    selectedGroupForAdd = null
+                }
+            }
+        )
+    }
+
+    // ÚJ: Csoport szerkesztése dialógus
+    groupToEdit?.let { groupName ->
+        EditGroupDialog(
+            groupName = groupName,
+            onDismissRequest = { groupToEdit = null },
+            onRename = { newName ->
+                viewModel.renameSubCategory(groupName, newName)
+                groupToEdit = null
+            },
+            onDelete = {
+                viewModel.deleteGroup(groupName)
+                groupToEdit = null
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Előzmények") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Előzmények")
+                        if (debugModeEnabled) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "🔧 DEBUG",
+                                fontSize = 12.sp,
+                                color = Color.Red,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = { navController.navigateUp() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Vissza")
@@ -499,7 +768,6 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                 firstDayOfWeek = java.time.DayOfWeek.MONDAY,
                 calendarState = calendarState,
                 monthHeader = { monthState ->
-                    // Hónap navigáció
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -526,7 +794,6 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                     }
                 },
                 dayContent = { dayState ->
-                    // Egyedi nap megjelenítés
                     val hasData = daysWithData.contains(dayState.date)
                     val isSelected = dayState.isFromCurrentMonth &&
                             dayState.date == selectedDate
@@ -535,7 +802,7 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                         modifier = Modifier
                             .size(48.dp)
                             .padding(2.dp)
-                            .clickable(enabled = dayState.isFromCurrentMonth) {  // ← ÚJ: Kattintható!
+                            .clickable(enabled = dayState.isFromCurrentMonth) {
                                 calendarState.selectionState.selection = listOf(dayState.date)
                             }
                             .background(
@@ -582,15 +849,64 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                                 it.categoryName == categoryName
                             }
                             if (categoryEntries.isNotEmpty()) {
-                                CategoryView(
-                                    categoryName = categoryName,
-                                    entries = categoryEntries.reversed(),
-                                    lastWorkdayEntries = lastWorkdayEntries,
-                                    bingoModeEnabled = false,
-                                    onAddClick = {},
-                                    onEditClick = {},
-                                    onEntryLongClick = { _ -> }
-                                )
+                                if (categoryName == "Egyéb") {
+                                    // Csoportnevek kinyerése a selected date entries-ből
+                                    val displayGroups = categoryEntries
+                                        .mapNotNull { it.subCategory }
+                                        .distinct()
+                                        .sorted()
+
+                                    CategoryViewEgyeb(
+                                        entries = categoryEntries,
+                                        groups = displayGroups,
+                                        lastWorkdayEntries = lastWorkdayEntries,
+                                        bingoModeEnabled = false,
+                                        onCreateGroup = if (debugModeEnabled) {
+                                            { showCreateGroupDialog = true }
+                                        } else {
+                                            {}
+                                        },
+                                        onAddToGroup = if (debugModeEnabled) {
+                                            { groupName ->
+                                                selectedGroupForAdd = groupName
+                                                categoryForAddDialog = categoryName
+                                            }
+                                        } else {
+                                            {}
+                                        },
+                                        onEditClick = {},  // Szerkesztés továbbra is disabled
+                                        onEntryLongClick = { entry ->
+                                            if (debugModeEnabled) {
+                                                entryToEdit = entry
+                                            }
+                                        },
+                                        onEditGroup = if (debugModeEnabled) {
+                                            { groupName -> groupToEdit = groupName }
+                                        } else {
+                                            {}
+                                        },
+                                        onDeleteAllGroups = {}  // Továbbra is disabled
+                                    )
+                                } else {
+                                    // Normál kategóriák
+                                    CategoryView(
+                                        categoryName = categoryName,
+                                        entries = categoryEntries.reversed(),
+                                        lastWorkdayEntries = lastWorkdayEntries,
+                                        bingoModeEnabled = false,
+                                        onAddClick = if (debugModeEnabled) {
+                                            { categoryForAddDialog = categoryName }
+                                        } else {
+                                            {}
+                                        },
+                                        onEditClick = {},  // Disabled
+                                        onEntryLongClick = { entry ->
+                                            if (debugModeEnabled) {
+                                                entryToEdit = entry
+                                            }
+                                        }
+                                    )
+                                }
                                 Spacer(Modifier.height(16.dp))
                             }
                         }
@@ -911,13 +1227,51 @@ fun AdminDialog(
     onDeleteAll: () -> Unit,
     onExportData: () -> Unit = {},
     onImportData: () -> Unit = {},
-    onReloadData: () -> Unit = {}  // ← ÚJ
+    onReloadData: () -> Unit = {},  // ← ÚJ
+    onToggleDebugMode: () -> Unit = {},  // ← ÚJ!
+    debugModeEnabled: Boolean = false    // ← ÚJ!
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text("Admin Funkciók") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // DEBUG MÓD - LEGELSŐ HELYEN!
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("🔧", style = MaterialTheme.typography.titleLarge)
+                        Column {
+                            Text(
+                                "DEBUG MÓD",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "Múltbeli napok szerkesztése",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = debugModeEnabled,
+                        onCheckedChange = { onToggleDebugMode() }
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Divider()
+                Spacer(Modifier.height(16.dp))
+
                 // Export/Import szakasz
                 Text("Adatkezelés", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
@@ -1193,6 +1547,284 @@ fun CategoryView(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
+@Composable
+fun CategoryViewEgyeb(
+    entries: List<NumberEntry>,
+    groups: List<String>,
+    lastWorkdayEntries: List<NumberEntry>,
+    bingoModeEnabled: Boolean = false,
+    onCreateGroup: () -> Unit,
+    onAddToGroup: (String) -> Unit,
+    onEditClick: () -> Unit,
+    onEntryLongClick: (NumberEntry) -> Unit,
+    onEditGroup: (String) -> Unit,  // ← ÚJ!
+    onDeleteAllGroups: () -> Unit   // ← ÚJ!
+) {
+    // Csoportok nélküli számok
+    val ungroupedEntries = entries.filter { it.subCategory == null }
+
+    // Csoportonkénti számok
+    val groupedEntries = entries
+        .filter { it.subCategory != null }
+        .groupBy { it.subCategory!! }
+
+    // Utolsó munkanap számai az Egyéb kategóriában
+    val lastWorkdayNumbers = lastWorkdayEntries
+        .filter { it.categoryName == "Egyéb" }
+        .map { it.value }
+
+    Column {
+        // FEJLÉC
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Új csoport gomb (🏷️ ikon helyett)
+            Button(
+                onClick = onCreateGroup,
+                modifier = Modifier.size(40.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text("🏷️", fontSize = 20.sp)
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            // Szerkesztés gomb
+            IconButton(onClick = onEditClick) {
+                Icon(Icons.Default.Edit, contentDescription = "Szerkesztés")
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            // Kategória név
+            Text(
+                text = "Egyéb",
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // CSOPORTOK
+        if (groups.isEmpty()) {
+            Text(
+                "Nincsenek csoportok.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onCreateGroup,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("+ Új csoport létrehozása")
+            }
+        } else {
+            // Csoportok megjelenítése
+            groups.forEach { groupName ->
+                val groupEntries = (groupedEntries[groupName] ?: emptyList())
+                    .filter { it.value > 0 }  // ← ÚJ! 0-ás kiszűrése
+                val groupTotal = groupEntries.sumOf { it.value }
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        // Csoport fejléc
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = {},
+                                    onLongClick = { onEditGroup(groupName) }  // ← ÚJ!
+                                ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "🏷️ $groupName",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            Button(
+                                onClick = { onAddToGroup(groupName) },
+                                modifier = Modifier.size(32.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text("+", fontSize = 18.sp)
+                            }
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+
+                        // Számok
+                        if (groupEntries.isEmpty()) {
+                            Text(
+                                "Nincsenek számok",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                groupEntries.reversed().forEach { entry ->
+                                    Box(
+                                        modifier = Modifier
+                                            .combinedClickable(
+                                                onClick = {},
+                                                onLongClick = { onEntryLongClick(entry) }
+                                            )
+                                            .padding(horizontal = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "${entry.value},",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = if (entry.movedFrom != null) {
+                                                Color(0xFFFFB300) // Sárga = átmozgatott
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Összesen: $groupTotal db",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+            }
+
+            // Új csoport gomb
+            Button(
+                onClick = onCreateGroup,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("+ Új csoport")
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+// Minden csoport törlése gomb
+            if (groups.isNotEmpty()) {
+                Button(
+                    onClick = onDeleteAllGroups,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Red.copy(alpha = 0.8f)
+                    )
+                ) {
+                    Text("🗑️ Minden csoport törlése")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Csoportosítatlan számok (ha vannak) - 0-ákat kiszűrjük
+        val filteredUngroupedEntries = ungroupedEntries.filter { it.value > 0 }
+        if (filteredUngroupedEntries.isNotEmpty()) {
+            Text(
+                "❓ Csoportosítatlan:",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                filteredUngroupedEntries.reversed().forEach { entry ->
+                    Box(
+                        modifier = Modifier
+                            .combinedClickable(
+                                onClick = {},
+                                onLongClick = { onEntryLongClick(entry) }
+                            )
+                            .padding(horizontal = 4.dp)
+                    ) {
+                        Text(
+                            text = "${entry.value},",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+        }
+
+        // BINGÓ mód (ha engedélyezve)
+        if (bingoModeEnabled && lastWorkdayNumbers.isNotEmpty()) {
+            val todayNumbers = entries.map { it.value }
+
+            Text(
+                text = "Előző: ",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+
+            val usedTodayCounts = mutableMapOf<Int, Int>()
+            todayNumbers.forEach { num ->
+                usedTodayCounts[num] = (usedTodayCounts[num] ?: 0) + 1
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                lastWorkdayNumbers.forEach { yesterdayNumber ->
+                    val availableToday = usedTodayCounts[yesterdayNumber] ?: 0
+                    val hasMatch = availableToday > 0
+
+                    if (hasMatch) {
+                        usedTodayCounts[yesterdayNumber] = availableToday - 1
+                    }
+
+                    Text(
+                        text = "$yesterdayNumber,",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (hasMatch) {
+                            Color(0xFF4CAF50)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        },
+                        fontWeight = if (hasMatch) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+        }
+
+        // Teljes összesítés
+        val totalSum = entries.sumOf { it.value }
+        Text(
+            "📊 Teljes összesen: $totalSum db",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
 @Composable
 fun EditEntryDialog(entry: NumberEntry, onDismissRequest: () -> Unit, onModify: (NumberEntry) -> Unit, onDelete: (NumberEntry) -> Unit) {
     var newNumberInput by remember { mutableStateOf(entry.value.toString()) }
@@ -1227,8 +1859,9 @@ fun EditEntryDialog(entry: NumberEntry, onDismissRequest: () -> Unit, onModify: 
 @Composable
 fun AddNumberDialog(
     categoryName: String,
+    groupName: String? = null,  // ← ÚJ paraméter!
     currentNumbers: List<Int>,
-    smartButtons: List<Int>,  // ← EZT ADD HOZZÁ
+    smartButtons: List<Int>,
     onDismissRequest: () -> Unit,
     onConfirmation: (Int, Boolean) -> Unit
 ) {
@@ -1236,10 +1869,18 @@ fun AddNumberDialog(
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // ÚJ: Dinamikus cím
+    val dialogTitle = if (groupName != null) {
+        "Szám hozzáadása: $categoryName - $groupName"
+    } else {
+        "Szám hozzáadása: $categoryName"
+    }
+
     AlertDialog(
-        title = { Text("Szám hozzáadása: $categoryName") },
+        title = { Text(dialogTitle) },  // ← Dinamikus cím!
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                // ÚJ: Csak akkor jelenítünk meg "Legutóbbi számok"-at, ha vannak (és nem 0-k!)
                 if (currentNumbers.isNotEmpty()) {
                     Text(
                         text = "Legutóbb hozzáadott elemek: " + currentNumbers.take(8).reversed().joinToString(", "),
@@ -1269,7 +1910,7 @@ fun AddNumberDialog(
                 }
                 Spacer(Modifier.height(8.dp))
 
-                // Alsó sor - OKOS gombok (vagy alapértelmezett)
+                // Alsó sor - OKOS gombok
                 val defaultButtons = listOf(14, 50, 80)
                 val bottomButtons = if (smartButtons.size >= 3) {
                     smartButtons.take(3)
@@ -1293,8 +1934,8 @@ fun AddNumberDialog(
         onDismissRequest = onDismissRequest,
         confirmButton = { TextButton(onClick = { numberInput.toIntOrNull()?.let { onConfirmation(it, true) } }) { Text("Ok") } },
         dismissButton = { TextButton(onClick = onDismissRequest) { Text("Mégse") } },
-        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),  // ← ÁTLÁTSZÓSÁG
-        tonalElevation = 0.dp  // ← Nincs árnyék réteg
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        tonalElevation = 0.dp
     )
 
     LaunchedEffect(Unit) {
@@ -1315,20 +1956,249 @@ fun UndoConfirmationDialogStable(onDismissRequest: () -> Unit, onConfirmation: (
     )
 }
 
-class FakeMainViewModel : MainViewModel(dao = object : NumberEntryDao {
+@Composable
+fun CreateGroupDialog(
+    previousGroups: List<String> = emptyList(),
+    onDismissRequest: () -> Unit,
+    onCreateGroup: (String) -> Unit,
+    onImportGroups: (List<String>) -> Unit
+) {
+    var newGroupName by remember { mutableStateOf("") }
+    var selectedPreviousGroups by remember { mutableStateOf(setOf<String>()) }
+    var showPreviousGroups by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("Csoport létrehozása") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Új csoport név
+                Text("Új csoport neve:", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = newGroupName,
+                    onValueChange = { newGroupName = it },
+                    label = { Text("Csoport neve") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(16.dp))
+
+                // Előző csoportok import
+                if (previousGroups.isNotEmpty()) {
+                    Divider()
+                    Spacer(Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "📋 Előző nap csoportjai:",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+
+                        IconButton(
+                            onClick = { showPreviousGroups = !showPreviousGroups },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Text(if (showPreviousGroups) "▼" else "▶")
+                        }
+                    }
+
+                    if (showPreviousGroups) {
+                        Spacer(Modifier.height(8.dp))
+
+                        previousGroups.forEach { groupName ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selectedPreviousGroups = if (selectedPreviousGroups.contains(groupName)) {
+                                            selectedPreviousGroups - groupName
+                                        } else {
+                                            selectedPreviousGroups + groupName
+                                        }
+                                    }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = selectedPreviousGroups.contains(groupName),
+                                    onCheckedChange = { checked ->
+                                        selectedPreviousGroups = if (checked) {
+                                            selectedPreviousGroups + groupName
+                                        } else {
+                                            selectedPreviousGroups - groupName
+                                        }
+                                    }
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(groupName)
+                            }
+                        }
+
+                        if (selectedPreviousGroups.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    onImportGroups(selectedPreviousGroups.toList())
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("✓ ${selectedPreviousGroups.size} csoport létrehozása")
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (newGroupName.isNotBlank()) {
+                        onCreateGroup(newGroupName.trim())
+                    }
+                },
+                enabled = newGroupName.isNotBlank()
+            ) {
+                Text("Létrehozás")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissRequest) {
+                Text("Mégse")
+            }
+        }
+    )
+}
+
+@Composable
+fun EditGroupDialog(
+    groupName: String,
+    onDismissRequest: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit
+) {
+    var newName by remember { mutableStateOf(groupName) }
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = { Text("Csoport törlése") },
+            text = {
+                Text("Biztosan törölni szeretnéd a(z) '$groupName' csoportot?\n\nA csoportban lévő összes szám törlődik!")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDelete()
+                        showDeleteConfirmation = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = Color.Red
+                    )
+                ) {
+                    Text("Törlés")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) {
+                    Text("Mégse")
+                }
+            }
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("'$groupName' szerkesztése") },
+        text = {
+            Column {
+                Text(
+                    "Csoport átnevezése:",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("Új név") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                TextButton(
+                    onClick = { showDeleteConfirmation = true },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = Color.Red
+                    )
+                ) {
+                    Text("🗑️ Törlés")
+                }
+
+                Row {
+                    TextButton(onClick = onDismissRequest) {
+                        Text("Mégse")
+                    }
+                    TextButton(
+                        onClick = {
+                            if (newName.isNotBlank() && newName != groupName) {
+                                onRename(newName.trim())
+                            } else {
+                                onDismissRequest()
+                            }
+                        },
+                        enabled = newName.isNotBlank()
+                    ) {
+                        Text("Átnevezés")
+                    }
+                }
+            }
+        }
+    )
+}
+
+private class FakeMainViewModel : MainViewModel(object : NumberEntryDao {
     override suspend fun insert(entry: NumberEntry) {}
     override suspend fun update(entry: NumberEntry) {}
     override suspend fun delete(entry: NumberEntry) {}
     override fun getAllEntries(): Flow<List<NumberEntry>> = MutableStateFlow(emptyList())
-    override fun getEntriesForDay(startOfDay: Date, endOfDay: Date): Flow<List<NumberEntry>> = MutableStateFlow(emptyList())
-    override fun getEntriesForMonth(startOfMonth: Date, endOfMonth: Date): Flow<List<NumberEntry>> = MutableStateFlow(emptyList())
+    override fun getEntriesForDay(startOfDay: Date, endOfDay: Date): Flow<List<NumberEntry>> =
+        MutableStateFlow(emptyList())
+    override fun getEntriesForMonth(startOfMonth: Date, endOfMonth: Date): Flow<List<NumberEntry>> =
+        MutableStateFlow(emptyList())
     override suspend fun getEntryById(id: Long): NumberEntry? = null
+    override suspend fun getLastEntry(): NumberEntry? = null
     override suspend fun deleteEntriesSince(startOfDay: Date) {}
     override suspend fun deleteAll() {}
-    override suspend fun getLastEntry(): NumberEntry? = null
-    override suspend fun getDaysWithDataInMonth(yearMonth: String): List<String> = emptyList()  // ← ÚJ SOR
+    override suspend fun getDaysWithDataInMonth(yearMonth: String): List<String> = emptyList()
+    override suspend fun getSubCategoriesForEgyeb(): List<String> = emptyList()
 
+    // ========== EGYÉB CSOPORTOK ==========
+    //override suspend fun insertGroup(group: EgyebGroup) {}
+    //override suspend fun updateGroup(group: EgyebGroup) {}
+    //override suspend fun deleteGroup(group: EgyebGroup) {}
+    //override fun getAllGroups(): Flow<List<EgyebGroup>> = MutableStateFlow(emptyList())
+    //override suspend fun getGroupByName(groupName: String): EgyebGroup? = null
+    //override suspend fun deleteAllGroups() {}
 })
+
 
 @Preview(showBackground = true)
 @Composable

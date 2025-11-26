@@ -14,6 +14,8 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import java.util.Date
 
@@ -23,6 +25,8 @@ data class NumberEntry(
     val id: Long = 0,
     val value: Int,
     val categoryName: String,
+    val subCategory: String? = null,
+    val movedFrom: String? = null,
     val timestamp: Date
 )
 
@@ -62,11 +66,18 @@ interface NumberEntryDao {
     SELECT DISTINCT date(timestamp / 1000, 'unixepoch', 'localtime') as date 
     FROM number_entries 
     WHERE strftime('%Y-%m', date(timestamp / 1000, 'unixepoch', 'localtime')) = :yearMonth
-""")
+    """)
     suspend fun getDaysWithDataInMonth(yearMonth: String): List<String>
+
+    @Query("SELECT DISTINCT subCategory FROM number_entries WHERE categoryName = 'Egyéb' AND subCategory IS NOT NULL")
+    suspend fun getSubCategoriesForEgyeb(): List<String>
 }
 
-@Database(entities = [NumberEntry::class], version = 1, exportSchema = false)
+@Database(
+    entities = [NumberEntry::class],
+    version = 4,
+    exportSchema = false
+)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
@@ -76,13 +87,60 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE number_entries ADD COLUMN subCategory TEXT")
+                database.execSQL("ALTER TABLE number_entries ADD COLUMN movedFrom TEXT")
+            }
+        }
+
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS egyeb_groups (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        groupName TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        sortOrder INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+
+                val cursor = database.query("""
+                    SELECT DISTINCT subCategory 
+                    FROM number_entries 
+                    WHERE subCategory IS NOT NULL 
+                    ORDER BY subCategory
+                """)
+
+                var sortOrder = 0
+                while (cursor.moveToNext()) {
+                    val groupName = cursor.getString(0)
+                    val now = System.currentTimeMillis()
+                    database.execSQL("""
+                        INSERT INTO egyeb_groups (groupName, createdAt, sortOrder) 
+                        VALUES ('$groupName', $now, $sortOrder)
+                    """)
+                    sortOrder++
+                }
+                cursor.close()
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("DROP TABLE IF EXISTS egyeb_groups")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "kieso_counter_database"
-                ).build()
+                )
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .build()
                 INSTANCE = instance
                 instance
             }
