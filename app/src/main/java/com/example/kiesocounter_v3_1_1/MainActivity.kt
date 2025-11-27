@@ -1522,7 +1522,30 @@ fun CategoryView(
                             )
                             .padding(horizontal = 4.dp)
                     ) {
-                        Text(text = "${entry.value},", style = MaterialTheme.typography.bodyLarge)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {  // ← ÚJ: Column!
+                            Text(
+                                text = "${entry.value},",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (entry.movedFromGroup) {
+                                    Color(0xFFFFEB3B)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+
+                            // ========== ÚJ: KÉK PÖTTY ==========
+                            if (entry.note != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .offset(y = (-2).dp)  // Közelebb a számhoz
+                                        .background(
+                                            color = Color(0xFF2196F3),  // Kék
+                                            shape = CircleShape
+                                        )
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1864,7 +1887,11 @@ fun CategoryViewEgyeb(
     if (showMoveToCategoryDialog && activeGroupName != null) {
         val availableCategories = viewModel.getAvailableCategories()
 
+        // ========== KRITIKUS: CAPTURE A VÁLTOZÓT! ==========
+        val capturedSelectedIds = selectedEntryIds  // ← ÚJ SOR!
+
         android.util.Log.d("CategoryViewEgyeb", "Dialógus - selectedEntryIds: $selectedEntryIds")
+        android.util.Log.d("CategoryViewEgyeb", "Dialógus - capturedSelectedIds: $capturedSelectedIds")  // ← ÚJ LOG!
 
         AlertDialog(
             onDismissRequest = { showMoveToCategoryDialog = false },
@@ -1872,7 +1899,7 @@ fun CategoryViewEgyeb(
             text = {
                 Column {
                     Text(
-                        "${selectedEntryIds.size} szám kijelölve",
+                        "${capturedSelectedIds.size} szám kijelölve",  // ← VÁLTOZOTT!
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -1884,12 +1911,12 @@ fun CategoryViewEgyeb(
                     availableCategories.forEach { category ->
                         Button(
                             onClick = {
-                                android.util.Log.d("CategoryViewEgyeb", "Gomb - selectedEntryIds: $selectedEntryIds")
+                                android.util.Log.d("CategoryViewEgyeb", "Gomb - capturedSelectedIds: $capturedSelectedIds")  // ← VÁLTOZOTT!
                                 scope.launch {
-                                    viewModel.moveEntriesToCategory(selectedEntryIds, category)
+                                    viewModel.moveEntriesToCategory(capturedSelectedIds, category)  // ← VÁLTOZOTT!
                                     android.widget.Toast.makeText(
                                         context,
-                                        "${selectedEntryIds.size} szám áthelyezve: $category",
+                                        "${capturedSelectedIds.size} szám áthelyezve: $category",  // ← VÁLTOZOTT!
                                         android.widget.Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -2110,7 +2137,7 @@ fun EgyebGroupCard(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     filteredEntries.reversed().forEach { entry ->
-                        val isSelected = localSelectedIds.contains(entry.id.toInt())  // ← JAVÍTVA!
+                        val isSelected = localSelectedIds.contains(entry.id.toInt())
 
                         Box(
                             modifier = Modifier
@@ -2123,16 +2150,10 @@ fun EgyebGroupCard(
                                         Color.Transparent,
                                     shape = RoundedCornerShape(8.dp)
                                 )
-                                .background(
-                                    when {
-                                        entry.movedFromGroup -> Color(0xFFFFC107).copy(alpha = 0.15f)
-                                        else -> Color.Transparent
-                                    }
-                                )
                                 .combinedClickable(
                                     onClick = {
                                         if (isSelectionMode) {
-                                            localSelectedIds = if (isSelected) {  // ← JAVÍTVA!
+                                            localSelectedIds = if (isSelected) {
                                                 localSelectedIds - entry.id.toInt()
                                             } else {
                                                 localSelectedIds + entry.id.toInt()
@@ -2147,15 +2168,30 @@ fun EgyebGroupCard(
                                 )
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
-                            Text(
-                                text = "${entry.value},",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (entry.movedFromGroup) {
-                                    Color(0xFFF57C00)
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {  // ← ÚJ: Column!
+                                Text(
+                                    text = "${entry.value},",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (entry.movedFromGroup) {
+                                        Color(0xFFFFEB3B)
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+
+                                // ========== ÚJ: KÉK PÖTTY ==========
+                                if (entry.note != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .offset(y = (-2).dp)
+                                            .background(
+                                                color = Color(0xFF2196F3),
+                                                shape = CircleShape
+                                            )
+                                    )
                                 }
-                            )
+                            }
                         }
                     }
                 }
@@ -2213,8 +2249,14 @@ fun EgyebGroupCard(
 
 
 @Composable
-fun EditEntryDialog(entry: NumberEntry, onDismissRequest: () -> Unit, onModify: (NumberEntry) -> Unit, onDelete: (NumberEntry) -> Unit) {
+fun EditEntryDialog(
+    entry: NumberEntry,
+    onDismissRequest: () -> Unit,
+    onModify: (NumberEntry) -> Unit,
+    onDelete: (NumberEntry) -> Unit
+) {
     var newNumberInput by remember { mutableStateOf(entry.value.toString()) }
+    var noteInput by remember { mutableStateOf(entry.note ?: "") }  // ← ÚJ!
     var showDeleteConfirmation by remember { mutableStateOf(false) }
 
     if (showDeleteConfirmation) {
@@ -2222,21 +2264,83 @@ fun EditEntryDialog(entry: NumberEntry, onDismissRequest: () -> Unit, onModify: 
             onDismissRequest = { showDeleteConfirmation = false },
             title = { Text("Törlés megerősítése") },
             text = { Text("Biztosan törölni szeretnéd a(z) '${entry.value}' értéket?") },
-            confirmButton = { TextButton(onClick = { onDelete(entry); showDeleteConfirmation = false }) { Text("Igen") } },
-            dismissButton = { TextButton(onClick = { showDeleteConfirmation = false }) { Text("Nem") } }
+            confirmButton = {
+                TextButton(onClick = { onDelete(entry); showDeleteConfirmation = false }) {
+                    Text("Igen")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) {
+                    Text("Nem")
+                }
+            }
         )
     }
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text(text = "'${entry.value}' szerkesztése") },
-        text = { OutlinedTextField(value = newNumberInput, onValueChange = { newNumberInput = it }, label = { Text("Új érték") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // Szám szerkesztése
+                OutlinedTextField(
+                    value = newNumberInput,
+                    onValueChange = { newNumberInput = it },
+                    label = { Text("Új érték") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(16.dp))
+
+                // ========== ÚJ: MEGJEGYZÉS MEZŐ ==========
+                OutlinedTextField(
+                    value = noteInput,
+                    onValueChange = { noteInput = it },
+                    label = { Text("Megjegyzés (opcionális)") },
+                    placeholder = { Text("pl. \"Kétszer futott át\"") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Kis tipp
+                if (noteInput.isBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "💡 A megjegyzéssel ellátott számok kék pöttyel lesznek jelölve",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+        },
         confirmButton = {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(onClick = { showDeleteConfirmation = true }) { Text("Törlés") }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                TextButton(onClick = { showDeleteConfirmation = true }) {
+                    Text("Törlés")
+                }
                 Row {
-                    TextButton(onClick = onDismissRequest) { Text("Mégse") }
-                    TextButton(onClick = { newNumberInput.toIntOrNull()?.let { onModify(entry.copy(value = it)) } }) { Text("Módosítás") }
+                    TextButton(onClick = onDismissRequest) {
+                        Text("Mégse")
+                    }
+                    TextButton(
+                        onClick = {
+                            newNumberInput.toIntOrNull()?.let { newValue ->
+                                val updatedEntry = entry.copy(
+                                    value = newValue,
+                                    note = noteInput.ifBlank { null }  // ← ÚJ!
+                                )
+                                onModify(updatedEntry)
+                            }
+                        }
+                    ) {
+                        Text("Módosítás")
+                    }
                 }
             }
         }
