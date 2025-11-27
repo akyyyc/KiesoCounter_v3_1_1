@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip                            // ← ÚJ!
@@ -1649,10 +1650,20 @@ fun CategoryViewEgyeb(
     onEntryLongClick: (NumberEntry) -> Unit,
     onEditGroup: (String) -> Unit,
     onDeleteAllGroups: () -> Unit,
-    viewModel: MainViewModel  // ← ÚJ!
+    viewModel: MainViewModel
 ) {
+    // ========== STATE A CATEGORYVIEWEGYEB SZINTJÉN ==========
+    var activeGroupName by remember { mutableStateOf<String?>(null) }
+    var selectedEntryIds by remember { mutableStateOf(setOf<Int>()) }
+    var showMoveToCategoryDialog by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     // Csoportok nélküli számok
     val ungroupedEntries = entries.filter { it.subCategory == null }
+
+    // ... (többi kód változatlan)
 
     // Csoportonkénti számok
     val groupedEntries = entries
@@ -1721,10 +1732,21 @@ fun CategoryViewEgyeb(
                     onAddToGroup = { onAddToGroup(groupName) },
                     onEditGroup = { onEditGroup(groupName) },
                     onEntryLongClick = onEntryLongClick,
-                    viewModel = viewModel,  // ← ÚJ!
-                    context = LocalContext.current  // ← ÚJ!
+                    isActiveGroup = activeGroupName == groupName,  // ← ÚJ!
+                    onSelectionModeChanged = { isActive, entryIds ->  // ← ÚJ!
+                        if (isActive) {
+                            activeGroupName = groupName
+                            selectedEntryIds = entryIds
+                        } else {
+                            activeGroupName = null
+                            selectedEntryIds = setOf()
+                        }
+                    },
+                    onMoveRequested = {  // ← ÚJ!
+                        showMoveToCategoryDialog = true
+                    },
+                    viewModel = viewModel  // ← ÚJ PARAMÉTER!
                 )
-
                 Spacer(Modifier.height(8.dp))
             }
 
@@ -1838,6 +1860,58 @@ fun CategoryViewEgyeb(
             fontWeight = FontWeight.Bold
         )
     }
+    // CategoryViewEgyeb végén, KÍVÜL a Column-on:
+    if (showMoveToCategoryDialog && activeGroupName != null) {
+        val availableCategories = viewModel.getAvailableCategories()
+
+        android.util.Log.d("CategoryViewEgyeb", "Dialógus - selectedEntryIds: $selectedEntryIds")
+
+        AlertDialog(
+            onDismissRequest = { showMoveToCategoryDialog = false },
+            title = { Text("Áthelyezés kategóriába") },
+            text = {
+                Column {
+                    Text(
+                        "${selectedEntryIds.size} szám kijelölve",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text("Válassz kategóriát:", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+
+                    availableCategories.forEach { category ->
+                        Button(
+                            onClick = {
+                                android.util.Log.d("CategoryViewEgyeb", "Gomb - selectedEntryIds: $selectedEntryIds")
+                                scope.launch {
+                                    viewModel.moveEntriesToCategory(selectedEntryIds, category)
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "${selectedEntryIds.size} szám áthelyezve: $category",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                selectedEntryIds = setOf()
+                                activeGroupName = null
+                                showMoveToCategoryDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        ) {
+                            Text(category)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showMoveToCategoryDialog = false }) {
+                    Text("Mégse")
+                }
+            }
+        )
+    }
 }
 
 // ========== ÚJ COMPOSABLE: EGYÉB GROUP CARD MULTI-SELECT GOMBOKKAL ==========
@@ -1849,22 +1923,25 @@ fun EgyebGroupCard(
     onAddToGroup: () -> Unit,
     onEditGroup: () -> Unit,
     onEntryLongClick: (NumberEntry) -> Unit,
-    viewModel: MainViewModel,  // ← ÚJ!
-    context: android.content.Context  // ← ÚJ!
+    isActiveGroup: Boolean,
+    onSelectionModeChanged: (Boolean, Set<Int>) -> Unit,
+    onMoveRequested: () -> Unit,
+    viewModel: MainViewModel  // ← ÚJ PARAMÉTER!
 ) {
-    // ========== STATE ==========
+    // ========== LOKÁLIS STATE ==========
     var isSelectionMode by remember { mutableStateOf(false) }
-    var selectedEntryIds by remember { mutableStateOf(setOf<Int>()) }
-    var showMoveToCategoryDialog by remember { mutableStateOf(false) }  // ← ÚJ!
-    var showDeleteConfirmDialog by remember { mutableStateOf(false) }   // ← ÚJ!
+    var localSelectedIds by remember { mutableStateOf(setOf<Int>()) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
-    val scope = rememberCoroutineScope()  // ← ÚJ!
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    // ← TÖRÖLD a `val viewModel: MainViewModel = viewModel()` sort!
 
-    // Kijelölés megszüntetése, ha üres
-    LaunchedEffect(selectedEntryIds.size) {
-        if (selectedEntryIds.isEmpty() && isSelectionMode) {
-            isSelectionMode = false
-        }
+    // ... (többi kód változatlan)
+
+    // State frissítés amikor selection mode változik
+    LaunchedEffect(isSelectionMode, localSelectedIds) {
+        onSelectionModeChanged(isSelectionMode, localSelectedIds)
     }
 
     // 0-ás értékek kiszűrése
@@ -1910,7 +1987,7 @@ fun EgyebGroupCard(
                                 .background(MaterialTheme.colorScheme.errorContainer)
                                 .clickable {
                                     isSelectionMode = false
-                                    selectedEntryIds = setOf()
+                                    localSelectedIds = setOf()  // ← JAVÍTVA!
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -1928,23 +2005,20 @@ fun EgyebGroupCard(
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(
-                                    if (selectedEntryIds.isNotEmpty())
+                                    if (localSelectedIds.isNotEmpty())  // ← JAVÍTVA!
                                         MaterialTheme.colorScheme.primaryContainer
                                     else
                                         MaterialTheme.colorScheme.surfaceVariant
                                 )
-                                .clickable(enabled = selectedEntryIds.isNotEmpty()) {
-                                    // ========== ÁTHELYEZÉS DIALÓGUS MEGNYITÁSA ==========
-                                    scope.launch {
-                                        showMoveToCategoryDialog = true
-                                    }
+                                .clickable(enabled = localSelectedIds.isNotEmpty()) {  // ← JAVÍTVA!
+                                    onMoveRequested()  // ← JAVÍTVA!
                                 },
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.DriveFileMove,
                                 contentDescription = "Áthelyezés kategóriába",
-                                tint = if (selectedEntryIds.isNotEmpty())
+                                tint = if (localSelectedIds.isNotEmpty())  // ← JAVÍTVA!
                                     MaterialTheme.colorScheme.onPrimaryContainer
                                 else
                                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
@@ -1958,13 +2032,12 @@ fun EgyebGroupCard(
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(
-                                    if (selectedEntryIds.isNotEmpty())
+                                    if (localSelectedIds.isNotEmpty())  // ← JAVÍTVA!
                                         MaterialTheme.colorScheme.errorContainer
                                     else
                                         MaterialTheme.colorScheme.surfaceVariant
                                 )
-                                .clickable(enabled = selectedEntryIds.isNotEmpty()) {
-                                    // ========== TÖRLÉS MEGERŐSÍTŐ DIALÓGUS ==========
+                                .clickable(enabled = localSelectedIds.isNotEmpty()) {  // ← JAVÍTVA!
                                     showDeleteConfirmDialog = true
                                 },
                             contentAlignment = Alignment.Center
@@ -1972,7 +2045,7 @@ fun EgyebGroupCard(
                             Icon(
                                 imageVector = Icons.Default.Delete,
                                 contentDescription = "Kijelöltek törlése",
-                                tint = if (selectedEntryIds.isNotEmpty())
+                                tint = if (localSelectedIds.isNotEmpty())  // ← JAVÍTVA!
                                     MaterialTheme.colorScheme.onErrorContainer
                                 else
                                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
@@ -2037,7 +2110,7 @@ fun EgyebGroupCard(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     filteredEntries.reversed().forEach { entry ->
-                        val isSelected = selectedEntryIds.contains(entry.id.toInt())
+                        val isSelected = localSelectedIds.contains(entry.id.toInt())  // ← JAVÍTVA!
 
                         Box(
                             modifier = Modifier
@@ -2059,10 +2132,10 @@ fun EgyebGroupCard(
                                 .combinedClickable(
                                     onClick = {
                                         if (isSelectionMode) {
-                                            selectedEntryIds = if (isSelected) {
-                                                selectedEntryIds - entry.id.toInt()
+                                            localSelectedIds = if (isSelected) {  // ← JAVÍTVA!
+                                                localSelectedIds - entry.id.toInt()
                                             } else {
-                                                selectedEntryIds + entry.id.toInt()
+                                                localSelectedIds + entry.id.toInt()
                                             }
                                         }
                                     },
@@ -2095,57 +2168,6 @@ fun EgyebGroupCard(
             )
         }
     }
-    // ========== ÁTHELYEZÉS KATEGÓRIÁBA DIALÓGUS ==========
-    if (showMoveToCategoryDialog) {
-        val availableCategories = viewModel.getAvailableCategories()
-
-        AlertDialog(
-            onDismissRequest = { showMoveToCategoryDialog = false },
-            title = { Text("Áthelyezés kategóriába") },
-            text = {
-                Column {
-                    Text(
-                        "${selectedEntryIds.size} szám kijelölve",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text("Válassz kategóriát:", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(8.dp))
-
-                    availableCategories.forEach { category ->
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    viewModel.moveEntriesToCategory(selectedEntryIds, category)
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        "${selectedEntryIds.size} szám áthelyezve: $category",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                                selectedEntryIds = setOf()
-                                isSelectionMode = false
-                                showMoveToCategoryDialog = false
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Text(category)
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showMoveToCategoryDialog = false }) {
-                    Text("Mégse")
-                }
-            }
-        )
-    }
 
     // ========== TÖRLÉS MEGERŐSÍTŐ DIALÓGUS ==========
     if (showDeleteConfirmDialog) {
@@ -2153,23 +2175,23 @@ fun EgyebGroupCard(
             onDismissRequest = { showDeleteConfirmDialog = false },
             title = { Text("Számok törlése") },
             text = {
-                Text("Biztosan törölni szeretnéd a kijelölt ${selectedEntryIds.size} számot?")
+                Text("Biztosan törölni szeretnéd a kijelölt ${localSelectedIds.size} számot?")  // ← JAVÍTVA!
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            selectedEntryIds.forEach { entryId ->
+                            localSelectedIds.forEach { entryId ->  // ← JAVÍTVA!
                                 val entry = entries.find { it.id.toInt() == entryId }
                                 entry?.let { viewModel.deleteEntry(it) }
                             }
                             android.widget.Toast.makeText(
                                 context,
-                                "${selectedEntryIds.size} szám törölve",
+                                "${localSelectedIds.size} szám törölve",  // ← JAVÍTVA!
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
                         }
-                        selectedEntryIds = setOf()
+                        localSelectedIds = setOf()  // ← JAVÍTVA!
                         isSelectionMode = false
                         showDeleteConfirmDialog = false
                     },
