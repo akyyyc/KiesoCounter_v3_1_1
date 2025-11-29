@@ -377,6 +377,16 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                         Spacer(Modifier.height(16.dp))
                     }
                 }
+
+                // ========== ÚJ: NAPI MEGJEGYZÉS KÁRTYA ==========
+                val todayNote by viewModel.todayNote.collectAsState()
+
+                DailyNoteCard(
+                    note = todayNote,
+                    onSaveNote = { viewModel.saveTodayNote(it) },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+
                 Row(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.Center) {
                     Button(onClick = { showUndoDialog = true }, enabled = allEntries.isNotEmpty()) {
                         Text("Visszavonás")
@@ -900,6 +910,37 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                         text = "Adatok a(z) $formattedDate napra:",
                         style = MaterialTheme.typography.titleMedium
                     )
+
+                    // ========== ÚJ: NAPI MEGJEGYZÉS MEGJELENÍTÉSE ==========
+                    var noteForDate by remember { mutableStateOf<String?>(null) }
+
+                    LaunchedEffect(date) {
+                        val javaDate = Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant())
+                        noteForDate = viewModel.getNoteForDate(javaDate)
+                    }
+
+                    noteForDate?.let { note ->
+                        Spacer(Modifier.height(8.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("📝", style = MaterialTheme.typography.titleMedium)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    note,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+
                     Spacer(Modifier.height(16.dp))
 
                     if (selectedDateEntries.isEmpty()) {
@@ -2665,6 +2706,119 @@ fun EditGroupDialog(
     )
 }
 
+// ========== NAPI MEGJEGYZÉS KOMPONENSEK ==========
+
+@Composable
+fun DailyNoteCard(
+    note: String?,
+    onSaveNote: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showEditDialog by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showEditDialog = true }
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "📝",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(end = 8.dp)
+            )
+
+            if (note.isNullOrBlank()) {
+                Text(
+                    "Napi megjegyzés (kattints ide...)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.weight(1f)
+                )
+            } else {
+                Text(
+                    note,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+
+    if (showEditDialog) {
+        EditDailyNoteDialog(
+            currentNote = note ?: "",
+            onDismiss = { showEditDialog = false },
+            onSave = { newNote ->
+                onSaveNote(newNote)
+                showEditDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+fun EditDailyNoteDialog(
+    currentNote: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var noteText by remember { mutableStateOf(currentNote) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("📝 Napi megjegyzés") },
+        text = {
+            Column {
+                Text(
+                    "Mai naphoz tartozó megjegyzés:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    label = { Text("Megjegyzés") },
+                    placeholder = { Text("pl. \"Péter szabin volt\"") },
+                    minLines = 3,
+                    maxLines = 6,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (currentNote.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Törléshez hagyd üresen a mezőt",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(noteText) }) {
+                Text("Mentés")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Mégse")
+            }
+        }
+    )
+}
+
 private class FakeMainViewModel : MainViewModel(object : NumberEntryDao {
     override suspend fun insert(entry: NumberEntry) {}
     override suspend fun update(entry: NumberEntry) {}
@@ -2680,6 +2834,11 @@ private class FakeMainViewModel : MainViewModel(object : NumberEntryDao {
     override suspend fun deleteAll() {}
     override suspend fun getDaysWithDataInMonth(yearMonth: String): List<String> = emptyList()
     override suspend fun getSubCategoriesForEgyeb(): List<String> = emptyList()
+
+    // ========== ÚJ: NAPI MEGJEGYZÉS FÜGGVÉNYEK ==========
+    override suspend fun insertDailyNote(note: DailyNote) {}
+    override suspend fun getDailyNote(date: String): DailyNote? = null
+    override suspend fun deleteDailyNote(date: String) {}
 
     // ========== EGYÉB CSOPORTOK ==========
     //override suspend fun insertGroup(group: EgyebGroup) {}

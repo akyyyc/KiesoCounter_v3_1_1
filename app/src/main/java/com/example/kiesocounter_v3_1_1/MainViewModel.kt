@@ -844,7 +844,57 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             Result.failure(e)
         }
     }
+    // ========== NAPI MEGJEGYZÉS ==========
+    private val _todayNote = MutableStateFlow<String?>(null)
+    val todayNote: StateFlow<String?> = _todayNote.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            loadLastWorkdayData()
+            loadEgyebEntriesByGroup()
+            loadTodayNote()  // ← ÚJ!
+        }
+    }
+
+    private suspend fun loadTodayNote() {
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val todayString = dateFormat.format(Date())
+
+        val note = dao.getDailyNote(todayString)
+        _todayNote.value = note?.note
+    }
+
+    fun saveTodayNote(noteText: String) {
+        viewModelScope.launch {
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+            val todayString = dateFormat.format(Date())
+
+            if (noteText.isBlank()) {
+                // Ha üres, töröljük
+                dao.deleteDailyNote(todayString)
+                _todayNote.value = null
+            } else {
+                // Mentés
+                val dailyNote = DailyNote(
+                    date = todayString,
+                    note = noteText.trim(),
+                    timestamp = Date()
+                )
+                dao.insertDailyNote(dailyNote)
+                _todayNote.value = noteText.trim()
+            }
+        }
+    }
+
+    suspend fun getNoteForDate(date: Date): String? {
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val dateString = dateFormat.format(date)
+        return dao.getDailyNote(dateString)?.note
+    }
 }
+
+
+
 
 class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

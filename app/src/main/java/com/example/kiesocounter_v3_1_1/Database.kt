@@ -32,6 +32,14 @@ data class NumberEntry(
     val timestamp: Date
 )
 
+@Entity(tableName = "daily_notes")
+data class DailyNote(
+    @PrimaryKey
+    val date: String,  // "2025-11-27" formátum
+    val note: String,
+    val timestamp: Date
+)
+
 @Dao
 interface NumberEntryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -73,11 +81,22 @@ interface NumberEntryDao {
 
     @Query("SELECT DISTINCT subCategory FROM number_entries WHERE categoryName = 'Egyéb' AND subCategory IS NOT NULL")
     suspend fun getSubCategoriesForEgyeb(): List<String>
+
+    // ========== NAPI MEGJEGYZÉSEK ==========
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDailyNote(note: DailyNote)
+
+    @Query("SELECT * FROM daily_notes WHERE date = :date")
+    suspend fun getDailyNote(date: String): DailyNote?
+
+    @Query("DELETE FROM daily_notes WHERE date = :date")
+    suspend fun deleteDailyNote(date: String)
 }
 
+
 @Database(
-    entities = [NumberEntry::class],
-    version = 6,  // ← 5-ről 6-ra!
+    entities = [NumberEntry::class, DailyNote::class],  // ← DailyNote hozzáadva!
+    version = 7,  // ← 6-ról 7-re!
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -147,6 +166,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // ========== ÚJ MIGRATION 6→7 ==========
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS daily_notes (
+                        date TEXT PRIMARY KEY NOT NULL,
+                        note TEXT NOT NULL,
+                        timestamp INTEGER NOT NULL
+                    )
+                """)
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -159,7 +191,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_2_3,
                         MIGRATION_3_4,
                         MIGRATION_4_5,
-                        MIGRATION_5_6  // ← ÚJ!
+                        MIGRATION_5_6,
+                        MIGRATION_6_7  // ← ÚJ!
                     )
                     .build()
                 INSTANCE = instance
