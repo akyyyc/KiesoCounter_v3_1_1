@@ -20,12 +20,20 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.compareTo
 import kotlin.random.Random
+import kotlin.text.toFloat
+import kotlin.times
 
 data class MonthlyChartData(val dayOfMonth: Int, val categoryTotals: Map<String, Int>)
 
-open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
+open class MainViewModel(
+    private val dao: NumberEntryDao,
+    val settingsManager: SettingsManager  // ← ÚJ!
+) : ViewModel() {
 
+    // ÚJ: Settings StateFlow
+    val settings: StateFlow<AppSettings> = settingsManager.settings
     val todayEntries: StateFlow<List<NumberEntry>> = dao.getEntriesForDay(getStartOfDay(Date()), getEndOfDay(Date()))
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -88,35 +96,53 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
             .mapValues { (_, entries) -> entries.sumOf { it.value } }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
-    init {
+
+
+    fun loadLastWorkdayData() {
         viewModelScope.launch {
-            loadLastWorkdayData()
-            loadEgyebEntriesByGroup()
-        }
-    }
+            // ========== ÚJ: SETTINGS-BŐL OLVASSUK A MÉLYSÉGET ==========
+            val maxDaysBack = settings.value.lastWorkdaySearchDepth  // ← DINAMIKUS!
 
-    suspend fun loadLastWorkdayData() {
-        val today = getStartOfDay(Date())
-        val calendar = Calendar.getInstance()
+            val today = Calendar.getInstance()
+            var daysBack = 1
 
-        for (i in 1..30) {
-            calendar.time = today
-            calendar.add(Calendar.DAY_OF_YEAR, -i)
+            while (daysBack <= maxDaysBack) {
+                val checkDate = Calendar.getInstance().apply {
+                    add(Calendar.DAY_OF_YEAR, -daysBack)
+                }
 
-            val checkDate = calendar.time
-            val startOfDay = getStartOfDay(checkDate)
-            val endOfDay = getEndOfDay(checkDate)
+                val dayOfWeek = checkDate.get(Calendar.DAY_OF_WEEK)
 
-            val entries = dao.getEntriesForDay(startOfDay, endOfDay)
-            val entryList = entries.first()
+                if (dayOfWeek != Calendar.SATURDAY && dayOfWeek != Calendar.SUNDAY) {
+                    val startOfDay = Calendar.getInstance().apply {
+                        time = checkDate.time
+                        set(Calendar.HOUR_OF_DAY, 0)
+                        set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }.time
 
-            if (entryList.isNotEmpty()) {
-                _lastWorkdayData.value = checkDate to entryList
-                return
+                    val endOfDay = Calendar.getInstance().apply {
+                        time = checkDate.time
+                        set(Calendar.HOUR_OF_DAY, 23)
+                        set(Calendar.MINUTE, 59)
+                        set(Calendar.SECOND, 59)
+                        set(Calendar.MILLISECOND, 999)
+                    }.time
+
+                    val entries = dao.getEntriesForDay(startOfDay, endOfDay).first()
+
+                    if (entries.isNotEmpty()) {
+                        _lastWorkdayData.value = Pair(checkDate.time, entries)  // ← JAVÍTVA!
+                        return@launch
+                    }
+                }
+
+                daysBack++
             }
-        }
 
-        _lastWorkdayData.value = null to emptyList()
+            _lastWorkdayData.value = Pair(null, emptyList())  // ← JAVÍTVA!
+        }
     }
 
     private val _selectedDate = MutableStateFlow(getStartOfDay(Date()))
@@ -562,43 +588,68 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
         }
     }
 
-    suspend fun getTopThreeNumbers(categoryName: String, days: Int = 7): List<Int> {
-        val calendar = Calendar.getInstance()
-        val endDate = calendar.time
-        calendar.add(Calendar.DAY_OF_YEAR, -(days + 1))
-        val startDate = calendar.time
+    suspend fun getTopThreeNumbers(categoryName: String): List<Int> {
+        // ========== ÚJ: SETTINGS-BŐL OLVASSUK AZ IDŐTARTAMOT ==========
+        val daysToLookBack = settings.value.smartButtonsDays  // ← DINAMIKUS!
 
-        val entries = dao.getEntriesForDay(getStartOfDay(startDate), getEndOfDay(endDate))
+        val startDate = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, -daysToLookBack)
+        }.time
 
-        return entries.first()
-            .filter { it.categoryName == categoryName && it.value > 0 }  // ← ÚJ: 0-ák kiszűrése!
+        val entries = dao.getEntriesForDay(startDate, Date()).first()
+
+        val numbers = entries
+            .filter { it.categoryName == categoryName }
             .groupBy { it.value }
             .mapValues { it.value.size }
             .toList()
             .sortedByDescending { it.second }
             .take(3)
             .map { it.first }
+
+        return numbers
     }
 
-    suspend fun getLastWorkdayBeforeDate(selectedDate: Date): List<NumberEntry> {
-        val startDate = getStartOfDay(selectedDate)
-        val calendar = Calendar.getInstance()
-        calendar.time = startDate
+    suspend fun getLastWorkdayBeforeDate(date: Date): List<NumberEntry> {
+        // ========== ÚJ: SETTINGS-BŐL OLVASSUK A MÉLYSÉGET ==========
+        val maxDaysBack = settings.value.lastWorkdaySearchDepth  // ← DINAMIKUS!
 
-        for (i in 1..30) {
-            calendar.time = startDate
-            calendar.add(Calendar.DAY_OF_YEAR, -i)
+        val calendar = Calendar.getInstance().apply { time = date }
+        var daysBack = 1
 
-            val checkDate = calendar.time
-            val start = getStartOfDay(checkDate)
-            val end = getEndOfDay(checkDate)
-
-            val entries = dao.getEntriesForDay(start, end)
-            val entryList = entries.first()
-
-            if (entryList.isNotEmpty()) {
-                return entryList
+        while (daysBack <= maxDaysBack) {
+            val checkDate = Calendar.getInstance().apply {
+                time = date
+                add(Calendar.DAY_OF_YEAR, -daysBack)
             }
+
+            val dayOfWeek = checkDate.get(Calendar.DAY_OF_WEEK)
+
+            if (dayOfWeek != Calendar.SATURDAY && dayOfWeek != Calendar.SUNDAY) {
+                val startOfDay = Calendar.getInstance().apply {
+                    time = checkDate.time
+                    set(Calendar.HOUR_OF_DAY, 0)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }.time
+
+                val endOfDay = Calendar.getInstance().apply {
+                    time = checkDate.time
+                    set(Calendar.HOUR_OF_DAY, 23)
+                    set(Calendar.MINUTE, 59)
+                    set(Calendar.SECOND, 59)
+                    set(Calendar.MILLISECOND, 999)
+                }.time
+
+                val entries = dao.getEntriesForDay(startOfDay, endOfDay).first()
+
+                if (entries.isNotEmpty()) {
+                    return entries
+                }
+            }
+
+            daysBack++
         }
 
         return emptyList()
@@ -891,18 +942,190 @@ open class MainViewModel(private val dao: NumberEntryDao) : ViewModel() {
         val dateString = dateFormat.format(date)
         return dao.getDailyNote(dateString)?.note
     }
+
+    // ========== STATISZTIKÁK ==========
+
+    suspend fun getStatisticsForPeriod(startDate: Date, endDate: Date): StatisticsResult {
+        val entries = dao.getEntriesForDay(startDate, endDate).first()
+
+        // 1. NAPI ÖSSZESÍTETT KÉSZLET - Dátum szerint csoportosítva
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+
+        // Naponta kategóriánként ÖSSZEGZÉS (nem felülírás!)
+        val dailyStockByDate = mutableMapOf<String, MutableMap<String, Int>>()
+
+        entries.forEach { entry ->
+            val dateKey = dateFormat.format(entry.timestamp)
+
+            if (!dailyStockByDate.containsKey(dateKey)) {
+                dailyStockByDate[dateKey] = mutableMapOf()
+            }
+
+            // ========== JAVÍTÁS: ÖSSZEGZÉS! ==========
+            val currentTotal = dailyStockByDate[dateKey]?.get(entry.categoryName) ?: 0
+            dailyStockByDate[dateKey]?.set(entry.categoryName, currentTotal + entry.value)
+        }
+
+        // ... többi kód változatlan ...
+
+
+        // 2. DAILYTOTAL OBJEKTUMOK - Változás számítással
+        val sortedDates = dailyStockByDate.keys.sorted()
+        val dailyTotals = mutableListOf<DailyTotal>()
+
+        // Előző nap készlete kategóriánként
+        val previousDayStock = mutableMapOf<String, Int>()
+        CATEGORIES.forEach { previousDayStock[it] = 0 }
+
+        sortedDates.forEach { dateKey ->
+            val categoryMap = dailyStockByDate[dateKey] ?: emptyMap()
+            val date = dateFormat.parse(dateKey) ?: Date()
+
+            // Jelenlegi nap készlete
+            val currentTotal = categoryMap.values.sum()
+
+            // Változás számítás: Mai készlet - Tegnapi készlet
+            var totalChange = 0
+            CATEGORIES.forEach { category ->
+                val currentStock = categoryMap[category] ?: previousDayStock[category] ?: 0
+                val prevStock = previousDayStock[category] ?: 0
+
+                totalChange += (currentStock - prevStock)
+
+                // Frissítjük az előző nap készletét
+                previousDayStock[category] = currentStock
+            }
+
+            dailyTotals.add(
+                DailyTotal(
+                    date = date,
+                    total = currentTotal,
+                    change = totalChange,
+                    categoryBreakdown = categoryMap
+                )
+            )
+        }
+
+        // 3. KATEGÓRIA STATISZTIKÁK
+        val categoryStats = CATEGORIES.map { categoryName ->
+            // Napi változások kategóriánként
+            val categoryDailyChanges = mutableListOf<Int>()
+            var previousStock = 0
+
+            sortedDates.forEach { dateKey ->
+                val currentStock = dailyStockByDate[dateKey]?.get(categoryName) ?: previousStock
+                val change = currentStock - previousStock
+
+                if (previousStock > 0 || currentStock > 0) {  // Csak ha volt aktivitás
+                    categoryDailyChanges.add(change)
+                }
+
+                previousStock = currentStock
+            }
+
+            // Nettó változás (utolsó - első)
+            val firstStock = sortedDates.firstOrNull()?.let {
+                dailyStockByDate[it]?.get(categoryName) ?: 0
+            } ?: 0
+            val lastStock = sortedDates.lastOrNull()?.let {
+                dailyStockByDate[it]?.get(categoryName) ?: 0
+            } ?: 0
+            val netChange = lastStock - firstStock
+
+            // Százalék (abszolút értékek alapján)
+            val totalAbsoluteChange = CATEGORIES.sumOf { cat ->
+                val first = sortedDates.firstOrNull()?.let { dailyStockByDate[it]?.get(cat) ?: 0 } ?: 0
+                val last = sortedDates.lastOrNull()?.let { dailyStockByDate[it]?.get(cat) ?: 0 } ?: 0
+                kotlin.math.abs(last - first)
+            }.coerceAtLeast(1)
+
+            val percentage = (kotlin.math.abs(netChange).toFloat() / totalAbsoluteChange * 100)
+
+            // Napi átlag
+            val daysCount = categoryDailyChanges.size.coerceAtLeast(1)
+            val dailyAverage = netChange.toFloat() / daysCount
+
+            // Trend számítás (első fél vs. második fél)
+            val halfwayPoint = categoryDailyChanges.size / 2
+            val firstHalf = categoryDailyChanges.take(halfwayPoint)
+            val secondHalf = categoryDailyChanges.drop(halfwayPoint)
+
+            val firstHalfAvg = if (firstHalf.isNotEmpty()) firstHalf.average() else 0.0
+            val secondHalfAvg = if (secondHalf.isNotEmpty()) secondHalf.average() else 0.0
+
+            val trend = when {
+                // Ha második félben jobban csökken = Javulás (↓ zöld)
+                secondHalfAvg < firstHalfAvg - 5 -> TrendDirection.DOWN
+                // Ha második félben kevésbé csökken vagy nő = Romlás (↑ piros)
+                secondHalfAvg > firstHalfAvg + 5 -> TrendDirection.UP
+                else -> TrendDirection.STABLE
+            }
+
+            // Legjobb/legrosszabb nap
+            val bestDay = categoryDailyChanges.minOrNull() ?: 0  // Legnagyobb csökkenés (legnegatívabb)
+            val worstDay = categoryDailyChanges.maxOrNull() ?: 0  // Legnagyobb növekedés (legpozitívabb)
+
+            CategoryStatistics(
+                categoryName = categoryName,
+                netChange = netChange,
+                percentage = percentage,
+                dailyAverage = dailyAverage,
+                trend = trend,
+                bestDay = bestDay,
+                worstDay = worstDay
+            )
+        }
+
+        return StatisticsResult(
+            categoryStats = categoryStats,
+            dailyTotals = dailyTotals
+        )
+    }
+
+}  // ← MainViewModel osztály vége
+
+
+// ========== STATISZTIKÁK DATA CLASS-OK (OSZTÁLYON KÍVÜL!) ==========
+
+data class StatisticsResult(
+    val categoryStats: List<CategoryStatistics>,
+    val dailyTotals: List<DailyTotal>
+)
+
+data class CategoryStatistics(
+    val categoryName: String,
+    val netChange: Int,  // Nettó változás (negatív = csökkent)
+    val percentage: Float,
+    val dailyAverage: Float,
+    val trend: TrendDirection,
+    val bestDay: Int,  // Legnagyobb csökkenés egy napon (legnegatívabb)
+    val worstDay: Int  // Legnagyobb növekedés egy napon (legpozitívabb)
+)
+
+enum class TrendDirection {
+    UP, DOWN, STABLE
 }
 
+data class DailyTotal(
+    val date: Date,
+    val total: Int,  // Jelenlegi készlet aznap
+    val change: Int,  // Változás az előző naphoz képest
+    val categoryBreakdown: Map<String, Int>
+)
 
 
+// ========== VIEWMODEL FACTORY ==========
 
 class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             val dao = AppDatabase.getInstance(application).numberEntryDao()
-            return MainViewModel(dao) as T
+            val settingsManager = SettingsManager(application)
+            return MainViewModel(dao, settingsManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
+
+

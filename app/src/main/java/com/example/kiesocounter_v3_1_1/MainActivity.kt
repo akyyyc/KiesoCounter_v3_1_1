@@ -29,9 +29,11 @@ import androidx.compose.material.icons.filled.Delete           // ← ÚJ!
 import androidx.compose.material.icons.filled.DriveFileMove   // ← ÚJ!
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings  // ← ÚJ!
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember  // ← Ellenőrizd, hogy megvan-e!
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip                            // ← ÚJ!
@@ -90,9 +92,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            KiesoCounter_v3_1_1Theme {
+            // ViewModel létrehozása ELŐBB
+            val application = LocalContext.current.applicationContext as Application
+            val viewModel: MainViewModel = viewModel(factory = MainViewModelFactory(application))
+
+            // Settings figyelése a ViewModel-ből
+            val settings by viewModel.settings.collectAsState()
+
+            KiesoCounter_v3_1_1Theme(
+                darkModeOption = settings.darkMode,
+                fontScale = settings.fontSize.scale  // ← ÚJ!
+            ) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    KiesoCounterApp()
+                    // ViewModel átadása
+                    KiesoCounterApp(viewModel = viewModel)
                 }
             }
         }
@@ -100,10 +113,8 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun KiesoCounterApp() {
+fun KiesoCounterApp(viewModel: MainViewModel) {  // ← ÚJ PARAMÉTER!
     val navController = rememberNavController()
-    val application = LocalContext.current.applicationContext as Application
-    val viewModel: MainViewModel = viewModel(factory = MainViewModelFactory(application))
 
     NavHost(navController = navController, startDestination = "main") {
         composable("main") {
@@ -122,6 +133,12 @@ fun KiesoCounterApp() {
         composable("monthly-chart") {
             MonthlyChartScreen(navController = navController, viewModel = viewModel)
         }
+        composable("settings") {
+            SettingsScreen(navController = navController, viewModel = viewModel)
+        }
+        composable("statistics") {
+            StatisticsScreen(navController = navController, viewModel = viewModel)
+        }
     }
 }
 
@@ -131,6 +148,11 @@ fun KiesoCounterApp() {
 @Composable
 fun MainScreen(navController: NavController, viewModel: MainViewModel) {
     val allEntries by viewModel.todayEntries.collectAsState()
+    val settings by viewModel.settings.collectAsState()  // ← ÚJ! Settings betöltése
+    // ========== DEBUG LOG ==========
+    LaunchedEffect(settings.dialogOpacity) {
+        android.util.Log.d("SETTINGS_DEBUG", "Dialog opacity changed: ${settings.dialogOpacity}")
+    }
     val lastWorkdayEntries by viewModel.lastWorkdayEntries.collectAsState()  // ← ÚJ
     var categoryForAddDialog by remember { mutableStateOf<String?>(null) }
     var showUndoDialog by remember { mutableStateOf(false) }
@@ -264,6 +286,20 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                     selected = false,
                     onClick = { navController.navigate("monthly-chart"); scope.launch { drawerState.close() } }
                 )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Settings, contentDescription = "Beállítások") },
+                    label = { Text("Beállítások") },
+                    selected = false,
+                    onClick = { navController.navigate("settings"); scope.launch { drawerState.close() } }
+                )
+                NavigationDrawerItem(  // ← ÚJ ELEM!
+                    icon = { Icon(Icons.Default.BarChart, contentDescription = "Statisztikák") },
+                    label = { Text("Statisztikák") },
+                    selected = false,
+                    onClick = { navController.navigate("statistics"); scope.launch { drawerState.close() } }
+                )
+
+                Divider()
 
                 Divider()
 
@@ -384,7 +420,9 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                 DailyNoteCard(
                     note = todayNote,
                     onSaveNote = { viewModel.saveTodayNote(it) },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    opacity = settings.dialogOpacity  // ← ÚJ!
+
                 )
 
                 Row(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.Center) {
@@ -439,7 +477,9 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                     categoryForAddDialog = null
                     selectedGroupForAdd = null
                 }
-            }
+            },
+            opacity = settings.dialogOpacity  // ← ÚJ!
+
         )
     }
 
@@ -448,15 +488,20 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             entry = entry,
             onDismissRequest = { entryToEdit = null },
             onModify = { viewModel.updateEntry(it); entryToEdit = null },
-            onDelete = { viewModel.deleteEntry(it); entryToEdit = null }
+            onDelete = { viewModel.deleteEntry(it); entryToEdit = null },
+            opacity = settings.dialogOpacity  // ← ÚJ!
+
         )
     }
 
     if (showUndoDialog) {
-        UndoConfirmationDialogStable(
-            onDismissRequest = { showUndoDialog = false },
-            onConfirmation = { viewModel.undoLastEntry(); showUndoDialog = false }
-        )
+        key(settings.dialogOpacity) {  // ← ÚJ! Újrarajzolja amikor változik
+            UndoConfirmationDialogStable(
+                onDismissRequest = { showUndoDialog = false },
+                onConfirmation = { viewModel.undoLastEntry(); showUndoDialog = false },
+                opacity = settings.dialogOpacity
+            )
+        }
     }
 
     val debugModeEnabled by viewModel.debugModeEnabled.collectAsState()  // ← ÚJ!
@@ -504,7 +549,10 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             onDismissRequest = { showExportSuccess = false },
             title = { Text("Sikeres export") },
             text = { Text("Az adatok sikeresen exportálva lettek!") },
-            confirmButton = { TextButton(onClick = { showExportSuccess = false }) { Text("OK") } }
+            confirmButton = { TextButton(onClick = { showExportSuccess = false }) { Text("OK") } },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = settings.dialogOpacity)  // ← ÚJ!
+
+
         )
     }
 
@@ -527,7 +575,9 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             onImportGroups = { groupNames ->
                 viewModel.createEmptyGroups(groupNames)  // ← ÚJ! Egyszerűbb!
                 showCreateGroupDialog = false
-            }
+            },
+            opacity = settings.dialogOpacity  // ← ÚJ!
+
         )
     }
 
@@ -537,7 +587,9 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             onDismissRequest = { showImportSuccess = null },
             title = { Text("Sikeres import") },
             text = { Text("$count bejegyzés importálva!") },
-            confirmButton = { TextButton(onClick = { showImportSuccess = null }) { Text("OK") } }
+            confirmButton = { TextButton(onClick = { showImportSuccess = null }) { Text("OK") } },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = settings.dialogOpacity)  // ← ÚJ!
+
         )
     }
 
@@ -553,7 +605,9 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             onDelete = {
                 viewModel.deleteGroup(groupName)
                 groupToEdit = null
-            }
+            },
+            opacity = settings.dialogOpacity  // ← ÚJ!
+
         )
     }
 
@@ -582,7 +636,9 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                 TextButton(onClick = { showDeleteAllGroupsDialog = false }) {
                     Text("Mégse")
                 }
-            }
+            },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = settings.dialogOpacity)  // ← ÚJ!
+
         )
     }
 
@@ -592,7 +648,9 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             onDismissRequest = { showError = null },
             title = { Text("Hiba") },
             text = { Text(error) },
-            confirmButton = { TextButton(onClick = { showError = null }) { Text("OK") } }
+            confirmButton = { TextButton(onClick = { showError = null }) { Text("OK") } },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = settings.dialogOpacity)  // ← ÚJ!
+
         )
     }
 }
@@ -601,6 +659,7 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
 @Composable
 fun EditScreen(navController: NavController, viewModel: MainViewModel, categoryName: String) {
     val allEntries by viewModel.todayEntries.collectAsState()
+    val settings by viewModel.settings.collectAsState()  // ← ÚJ SOR!
     val entries = allEntries.filter { it.categoryName == categoryName }
     var entryToEdit by remember { mutableStateOf<NumberEntry?>(null) }
 
@@ -609,7 +668,9 @@ fun EditScreen(navController: NavController, viewModel: MainViewModel, categoryN
             entry = entry,
             onDismissRequest = { entryToEdit = null },
             onModify = { viewModel.updateEntry(it); entryToEdit = null },
-            onDelete = { viewModel.deleteEntry(it); entryToEdit = null }
+            onDelete = { viewModel.deleteEntry(it); entryToEdit = null },
+            opacity = settings.dialogOpacity  // ← ÚJ!
+
         )
     }
 
@@ -649,6 +710,8 @@ fun EditScreen(navController: NavController, viewModel: MainViewModel, categoryN
 fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
     val selectedDateEntries by viewModel.selectedDayEntries.collectAsState()
     val daysWithData by viewModel.daysWithData.collectAsState()
+    val settings by viewModel.settings.collectAsState()  // ← ÚJ!
+
     val debugModeEnabled by viewModel.debugModeEnabled.collectAsState()
 
     var lastWorkdayEntries by remember { mutableStateOf<List<NumberEntry>>(emptyList()) }
@@ -713,7 +776,8 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
             entry = entry,
             onDismissRequest = { entryToEdit = null },
             onModify = { viewModel.updateEntry(it); entryToEdit = null },
-            onDelete = { viewModel.deleteEntry(it); entryToEdit = null }
+            onDelete = { viewModel.deleteEntry(it); entryToEdit = null },
+            opacity = settings.dialogOpacity  // ← ÚJ!
         )
     }
 
@@ -735,7 +799,9 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
             onImportGroups = { groupNames ->
                 viewModel.createEmptyGroups(groupNames)
                 showCreateGroupDialog = false
-            }
+            },
+            opacity = settings.dialogOpacity  // ← ÚJ!
+
         )
     }
 
@@ -782,7 +848,9 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
                     categoryForAddDialog = null
                     selectedGroupForAdd = null
                 }
-            }
+            },
+            opacity = settings.dialogOpacity  // ← ÚJ!
+
         )
     }
 
@@ -798,7 +866,9 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
             onDelete = {
                 viewModel.deleteGroup(groupName)
                 groupToEdit = null
-            }
+            },
+            opacity = settings.dialogOpacity  // ← ÚJ!
+
         )
     }
 
@@ -2283,7 +2353,9 @@ fun EgyebGroupCard(
                 TextButton(onClick = { showDeleteConfirmDialog = false }) {
                     Text("Mégse")
                 }
-            }
+            },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)  // ← ÚJ! (fix 80%, mert nincs settings itt)
+
         )
     }
 }
@@ -2294,7 +2366,9 @@ fun EditEntryDialog(
     entry: NumberEntry,
     onDismissRequest: () -> Unit,
     onModify: (NumberEntry) -> Unit,
-    onDelete: (NumberEntry) -> Unit
+    onDelete: (NumberEntry) -> Unit,
+    opacity: Float = 0.8f  // ← ÚJ!
+
 ) {
     var newNumberInput by remember { mutableStateOf(entry.value.toString()) }
     var noteInput by remember { mutableStateOf(entry.note ?: "") }  // ← ÚJ!
@@ -2314,7 +2388,9 @@ fun EditEntryDialog(
                 TextButton(onClick = { showDeleteConfirmation = false }) {
                     Text("Nem")
                 }
-            }
+            },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = opacity)  // ← ÚJ!
+
         )
     }
 
@@ -2395,7 +2471,9 @@ fun AddNumberDialog(
     currentNumbers: List<Int>,
     smartButtons: List<Int>,
     onDismissRequest: () -> Unit,
-    onConfirmation: (Int, Boolean) -> Unit
+    onConfirmation: (Int, Boolean) -> Unit,
+    opacity: Float = 0.8f  // ← ÚJ!
+
 ) {
     var numberInput by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
@@ -2466,7 +2544,7 @@ fun AddNumberDialog(
         onDismissRequest = onDismissRequest,
         confirmButton = { TextButton(onClick = { numberInput.toIntOrNull()?.let { onConfirmation(it, true) } }) { Text("Ok") } },
         dismissButton = { TextButton(onClick = onDismissRequest) { Text("Mégse") } },
-        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = opacity),  // ← ÚJ!
         tonalElevation = 0.dp
     )
 
@@ -2478,13 +2556,24 @@ fun AddNumberDialog(
 }
 
 @Composable
-fun UndoConfirmationDialogStable(onDismissRequest: () -> Unit, onConfirmation: () -> Unit) {
+fun UndoConfirmationDialogStable(
+    onDismissRequest: () -> Unit,
+    onConfirmation: () -> Unit,
+    opacity: Float = 0.85f
+) {
+    // ========== DEBUG LOG ==========
+    android.util.Log.d("DIALOG_DEBUG", "UndoDialog opacity: $opacity")
+
+    val containerColor = MaterialTheme.colorScheme.surface.copy(alpha = opacity)
+    android.util.Log.d("DIALOG_DEBUG", "Container color alpha: ${containerColor.alpha}")
+
     AlertDialog(
         title = { Text("Visszavonás") },
         text = { Text("Biztosan törölni szeretnéd az utoljára bevitt számot?") },
         onDismissRequest = onDismissRequest,
         confirmButton = { TextButton(onClick = onConfirmation) { Text("Igen") } },
-        dismissButton = { TextButton(onClick = onDismissRequest) { Text("Nem") } }
+        dismissButton = { TextButton(onClick = onDismissRequest) { Text("Nem") } },
+        containerColor = containerColor  // ← JAVÍTVA!
     )
 }
 
@@ -2493,7 +2582,9 @@ fun CreateGroupDialog(
     previousGroups: List<String> = emptyList(),
     onDismissRequest: () -> Unit,
     onCreateGroup: (String) -> Unit,
-    onImportGroups: (List<String>) -> Unit
+    onImportGroups: (List<String>) -> Unit,
+    opacity: Float = 0.8f  // ← ÚJ!
+
 ) {
     var newGroupName by remember { mutableStateOf("") }
     var selectedPreviousGroups by remember { mutableStateOf(setOf<String>()) }
@@ -2608,7 +2699,9 @@ fun CreateGroupDialog(
             TextButton(onClick = onDismissRequest) {
                 Text("Mégse")
             }
-        }
+        },
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = opacity)  // ← ÚJ!
+
     )
 }
 
@@ -2617,7 +2710,9 @@ fun EditGroupDialog(
     groupName: String,
     onDismissRequest: () -> Unit,
     onRename: (String) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    opacity: Float = 0.8f  // ← ÚJ!
+
 ) {
     var newName by remember { mutableStateOf(groupName) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
@@ -2646,7 +2741,9 @@ fun EditGroupDialog(
                 TextButton(onClick = { showDeleteConfirmation = false }) {
                     Text("Mégse")
                 }
-            }
+            },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = opacity)  // ← ÚJ!
+
         )
     }
 
@@ -2702,7 +2799,9 @@ fun EditGroupDialog(
                     }
                 }
             }
-        }
+        },
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = opacity)  // ← ÚJ!
+
     )
 }
 
@@ -2712,7 +2811,10 @@ fun EditGroupDialog(
 fun DailyNoteCard(
     note: String?,
     onSaveNote: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    opacity: Float = 0.8f  // ← ÚJ PARAMÉTER!
+
+
 ) {
     var showEditDialog by remember { mutableStateOf(false) }
 
@@ -2761,7 +2863,9 @@ fun DailyNoteCard(
             onSave = { newNote ->
                 onSaveNote(newNote)
                 showEditDialog = false
-            }
+            },
+            opacity = opacity  // ← ÚJ!
+
         )
     }
 }
@@ -2770,7 +2874,9 @@ fun DailyNoteCard(
 fun EditDailyNoteDialog(
     currentNote: String,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String) -> Unit,
+    opacity: Float = 0.8f  // ← ÚJ!
+
 ) {
     var noteText by remember { mutableStateOf(currentNote) }
 
@@ -2815,8 +2921,16 @@ fun EditDailyNoteDialog(
             TextButton(onClick = onDismiss) {
                 Text("Mégse")
             }
-        }
+        },
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = opacity)  // ← ÚJ!
+
     )
+}
+
+// ========== HELPER FÜGGVÉNY: Átlátszó dialógus szín ==========
+@Composable
+fun dialogContainerColor(opacity: Float = 0.85f): androidx.compose.ui.graphics.Color {
+    return MaterialTheme.colorScheme.surface.copy(alpha = opacity)
 }
 
 private class FakeMainViewModel : MainViewModel(object : NumberEntryDao {
@@ -2826,8 +2940,10 @@ private class FakeMainViewModel : MainViewModel(object : NumberEntryDao {
     override fun getAllEntries(): Flow<List<NumberEntry>> = MutableStateFlow(emptyList())
     override fun getEntriesForDay(startOfDay: Date, endOfDay: Date): Flow<List<NumberEntry>> =
         MutableStateFlow(emptyList())
+
     override fun getEntriesForMonth(startOfMonth: Date, endOfMonth: Date): Flow<List<NumberEntry>> =
         MutableStateFlow(emptyList())
+
     override suspend fun getEntryById(id: Long): NumberEntry? = null
     override suspend fun getLastEntry(): NumberEntry? = null
     override suspend fun deleteEntriesSince(startOfDay: Date) {}
@@ -2839,24 +2955,26 @@ private class FakeMainViewModel : MainViewModel(object : NumberEntryDao {
     override suspend fun insertDailyNote(note: DailyNote) {}
     override suspend fun getDailyNote(date: String): DailyNote? = null
     override suspend fun deleteDailyNote(date: String) {}
+},
 
-    // ========== EGYÉB CSOPORTOK ==========
+    settingsManager = SettingsManager(
+    android.app.Application()  // Fake context preview-hoz
+    )
+)
+// ========== EGYÉB CSOPORTOK ==========
     //override suspend fun insertGroup(group: EgyebGroup) {}
     //override suspend fun updateGroup(group: EgyebGroup) {}
     //override suspend fun deleteGroup(group: EgyebGroup) {}
     //override fun getAllGroups(): Flow<List<EgyebGroup>> = MutableStateFlow(emptyList())
     //override suspend fun getGroupByName(groupName: String): EgyebGroup? = null
     //override suspend fun deleteAllGroups() {}
-})
+
 
 
 @Preview(showBackground = true)
 @Composable
 fun KiesoCounterAppPreview() {
     KiesoCounter_v3_1_1Theme {
-        MainScreen(
-            navController = rememberNavController(),
-            viewModel = FakeMainViewModel()
-        )
+        KiesoCounterApp(viewModel = FakeMainViewModel())  // ← JAVÍTVA!
     }
 }
