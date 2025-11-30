@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.google.services)  // ← MÓDOSÍTVA! (alias-szal)
+
 }
 
 android {
@@ -14,7 +16,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "3.5.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
@@ -88,6 +90,20 @@ dependencies {
     // Vico Chart Library
     implementation(libs.vico.compose)
     implementation(libs.vico.core)
+
+    // ═══════════════════════════════════════════════
+    // FIREBASE ÚJ FÜGGŐSÉGEK
+    // ═══════════════════════════════════════════════
+    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
+    implementation("com.google.firebase:firebase-database-ktx")
+    implementation("com.google.firebase:firebase-auth-ktx")
+
+    // QR kód generálás
+    implementation("com.google.zxing:core:3.5.2")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
 
     // Compose Calendar
     implementation(libs.compose.calendar)

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.DriveFileMove   // ← ÚJ!
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings  // ← ÚJ!
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -92,20 +93,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            // ViewModel létrehozása ELŐBB
             val application = LocalContext.current.applicationContext as Application
-            val viewModel: MainViewModel = viewModel(factory = MainViewModelFactory(application))
+            val mainViewModel: MainViewModel = viewModel(factory = MainViewModelFactory(application))
 
-            // Settings figyelése a ViewModel-ből
-            val settings by viewModel.settings.collectAsState()
+            val settings by mainViewModel.settings.collectAsState()
 
             KiesoCounter_v3_1_1Theme(
                 darkModeOption = settings.darkMode,
-                fontScale = settings.fontSize.scale  // ← ÚJ!
+                fontScale = settings.fontSize.scale
             ) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    // ViewModel átadása
-                    KiesoCounterApp(viewModel = viewModel)
+                    KiesoCounterApp()  // ← NINCS PARAMÉTER!
                 }
             }
         }
@@ -113,31 +111,71 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun KiesoCounterApp(viewModel: MainViewModel) {  // ← ÚJ PARAMÉTER!
+fun KiesoCounterApp() {
     val navController = rememberNavController()
+    val application = LocalContext.current.applicationContext as Application
+
+    // ViewModelek létrehozása
+    val mainViewModel: MainViewModel = viewModel(factory = MainViewModelFactory(application))
+    val workspaceViewModel: WorkspaceViewModel = viewModel()
+
+    // ═══════════════════════════════════════════════════════════
+    // ÚJ: FELHASZNÁLÓ ELLENŐRZÉS
+    // ═══════════════════════════════════════════════════════════
+    val hasUserName = workspaceViewModel.hasUserName()
+    val startDestination = if (hasUserName) "main" else "user-selection"
+
+    android.util.Log.d("🚀 NAV", "hasUserName: $hasUserName")
+    android.util.Log.d("🚀 NAV", "startDestination: $startDestination")
 
     NavHost(navController = navController, startDestination = "main") {
+        // ═══════════════════════════════════════════════════════════
+        // ÚJ: Felhasználó választó képernyő
+        // ═══════════════════════════════════════════════════════════
+        composable("user-selection") {
+            UserSelectionScreen(
+                onUserSelected = { userName ->
+                    android.util.Log.d("🚀 USER", "Felhasználó választva: $userName")
+                    workspaceViewModel.setUserName(userName)
+                    navController.navigate("main") {
+                        popUpTo("user-selection") { inclusive = true }
+                    }
+                }
+            )
+        }
+
         composable("main") {
-            MainScreen(navController = navController, viewModel = viewModel)
+            MainScreen(
+                navController = navController,
+                viewModel = mainViewModel,
+                workspaceViewModel = workspaceViewModel
+            )
         }
         composable("edit/{categoryName}", arguments = listOf(navArgument("categoryName") { type = NavType.StringType })) {
             val categoryName = it.arguments?.getString("categoryName")?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()) } ?: ""
-            EditScreen(navController = navController, viewModel = viewModel, categoryName = categoryName)
+            EditScreen(navController = navController, viewModel = mainViewModel, categoryName = categoryName)
         }
         composable("calendar") {
-            CalendarScreen(navController = navController, viewModel = viewModel)
+            CalendarScreen(
+                navController = navController,
+                viewModel = mainViewModel,
+                workspaceViewModel = workspaceViewModel  // ← ÚJ!
+            )
         }
         composable("chart") {
-            ChartScreen(navController = navController, viewModel = viewModel)
+            ChartScreen(navController = navController, viewModel = mainViewModel)
         }
         composable("monthly-chart") {
-            MonthlyChartScreen(navController = navController, viewModel = viewModel)
+            MonthlyChartScreen(navController = navController, viewModel = mainViewModel)
         }
         composable("settings") {
-            SettingsScreen(navController = navController, viewModel = viewModel)
+            SettingsScreen(navController = navController, viewModel = mainViewModel)
         }
         composable("statistics") {
-            StatisticsScreen(navController = navController, viewModel = viewModel)
+            StatisticsScreen(navController = navController, viewModel = mainViewModel)
+        }
+        composable("workspace-setup") {
+            WorkspaceSetupScreen(navController = navController)
         }
     }
 }
@@ -146,8 +184,32 @@ fun KiesoCounterApp(viewModel: MainViewModel) {  // ← ÚJ PARAMÉTER!
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(navController: NavController, viewModel: MainViewModel) {
+fun MainScreen(
+    navController: NavController,
+    viewModel: MainViewModel,
+    workspaceViewModel: WorkspaceViewModel  // ← ÚJ paraméter!
+) {
     val allEntries by viewModel.todayEntries.collectAsState()
+    val currentWorkspace by workspaceViewModel.currentWorkspace.collectAsState()  // ← ÚJ!
+
+    // ═══════════════════════════════════════════════════════════
+    // ÚJ: FIREBASE ENTRY-K BETÖLTÉSE
+    // ═══════════════════════════════════════════════════════════
+    val firebaseEntries by workspaceViewModel.firebaseEntries.collectAsState()
+
+    // ═══════════════════════════════════════════════════════════
+// FIREBASE ENTRY-K HASZNÁLATA - CSAK HA VAN WORKSPACE!
+// ═══════════════════════════════════════════════════════════
+    val displayEntries = remember(allEntries, firebaseEntries, currentWorkspace) {
+        if (currentWorkspace != null) {
+            // Ha van workspace, CSAK Firebase entry-ket használjuk
+            firebaseEntries.map { it.toNumberEntry() }
+        } else {
+            // Ha nincs workspace, lokális entry-ket használjuk
+            allEntries
+        }
+    }
+
     val settings by viewModel.settings.collectAsState()  // ← ÚJ! Settings betöltése
     // ========== DEBUG LOG ==========
     LaunchedEffect(settings.dialogOpacity) {
@@ -298,6 +360,15 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                     selected = false,
                     onClick = { navController.navigate("statistics"); scope.launch { drawerState.close() } }
                 )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.People, contentDescription = "Workspace") },
+                    label = { Text("Workspace (Firebase)") },
+                    selected = false,
+                    onClick = {
+                        navController.navigate("workspace-setup")
+                        scope.launch { drawerState.close() }
+                    }
+                )
 
                 Divider()
 
@@ -365,11 +436,26 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
               //  }
                 LazyColumn(modifier = Modifier.weight(1f).padding(16.dp)) {
                     items(CATEGORIES) { categoryName ->
-                        val categoryEntries = allEntries.filter { it.categoryName == categoryName }
+                        val categoryEntries = displayEntries.filter { it.categoryName == categoryName }
 
                         if (categoryName == "Egyéb") {
                             // ÚJ: Speciális megjelenítés az Egyéb kategóriának
-                            val groups by viewModel.egyebSubCategories.collectAsState()
+                            // ═══════════════════════════════════════════════════════════
+// CSOPORTOK - FIREBASE-BŐL HA VAN WORKSPACE!
+// ═══════════════════════════════════════════════════════════
+                            val groups = remember(displayEntries, currentWorkspace) {
+                                if (currentWorkspace != null) {
+                                    // Ha van workspace, Firebase entry-kből vesszük a csoportokat
+                                    displayEntries
+                                        .filter { it.categoryName == "Egyéb" && it.subCategory != null }
+                                        .mapNotNull { it.subCategory }
+                                        .distinct()
+                                        .sorted()
+                                } else {
+                                    // Ha nincs workspace, lokális egyebSubCategories
+                                    viewModel.egyebSubCategories.value
+                                }
+                            }
 
                             CategoryViewEgyeb(
                                 entries = categoryEntries,
@@ -434,52 +520,91 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+// MAINACTIVITY.KT - MAINSCREEN - AddNumberDialog RÉSZ
+// Keresd meg ezt a blokkot és CSERÉLD LE!
+// ════════════════════════════════════════════════════════════════════
+
     categoryForAddDialog?.let { categoryName ->
         var smartButtons by remember { mutableStateOf<List<Int>>(emptyList()) }
 
-        // Betöltjük az okos gombokat
         LaunchedEffect(categoryName) {
             smartButtons = viewModel.getTopThreeNumbers(categoryName)
         }
 
-        // ÚJ: Csak az AKTUÁLIS CSOPORT számai (0-ák nélkül!)
+        // ═══════════════════════════════════════════════════════════
+        // JAVÍTÁS: FIREBASE ENTRY-KBŐL VEGYÜK A LEGUTÓBBI SZÁMOKAT!
+        // ═══════════════════════════════════════════════════════════
         val currentNumbers = if (categoryName == "Egyéb" && selectedGroupForAdd != null) {
-            allEntries
+            displayEntries  // ← JAVÍTVA: displayEntries használata!
                 .filter {
                     it.categoryName == categoryName &&
                             it.subCategory == selectedGroupForAdd &&
-                            it.value > 0  // ← 0-ák kiszűrése!
+                            it.value > 0
                 }
                 .map { it.value }
         } else {
-            allEntries
-                .filter { it.categoryName == categoryName }
+            displayEntries  // ← JAVÍTVA: displayEntries használata!
+                .filter { it.categoryName == categoryName && it.value > 0 }
                 .map { it.value }
         }
 
         AddNumberDialog(
             categoryName = categoryName,
-            groupName = selectedGroupForAdd,  // ← ÚJ paraméter!
-            currentNumbers = currentNumbers,  // ← Ez a HELYES érték!
+            groupName = selectedGroupForAdd,
+            currentNumbers = currentNumbers,
             smartButtons = smartButtons,
             onDismissRequest = {
                 categoryForAddDialog = null
                 selectedGroupForAdd = null
             },
             onConfirmation = { number, shouldClose ->
+                android.util.Log.d("🔥 PHONE_ADD", "===== SZÁM HOZZÁADÁSA =====")
+                android.util.Log.d("🔥 PHONE_ADD", "Szám: $number")
+                android.util.Log.d("🔥 PHONE_ADD", "Kategória: $categoryName")
+                android.util.Log.d("🔥 PHONE_ADD", "currentWorkspace: ${currentWorkspace?.name}")
+                android.util.Log.d("🔥 PHONE_ADD", "currentWorkspace null?: ${currentWorkspace == null}")
+
+                // 1. LOKÁLIS MENTÉS
                 if (categoryName == "Egyéb" && selectedGroupForAdd != null) {
+                    android.util.Log.d("🔥 PHONE_ADD", "Egyéb kategória mentés")
                     viewModel.addEntryWithSubCategory(number, categoryName, selectedGroupForAdd)
                 } else {
+                    android.util.Log.d("🔥 PHONE_ADD", "Normál kategória mentés")
                     viewModel.addEntry(number, categoryName)
                 }
+
+                // 2. FIREBASE SYNC
+                android.util.Log.d("🔥 PHONE_ADD", "Firebase sync ellenőrzés...")
+                if (currentWorkspace != null) {
+                    android.util.Log.d("🔥 PHONE_ADD", "✅ VAN workspace! Firebase sync INDUL!")
+
+                    val firebaseEntry = NumberEntry(
+                        id = System.currentTimeMillis(),
+                        value = number,
+                        categoryName = categoryName,
+                        subCategory = selectedGroupForAdd,
+                        timestamp = Date()
+                    )
+
+                    android.util.Log.d("🔥 PHONE_ADD", "Entry létrehozva - ID: ${firebaseEntry.id}")
+                    android.util.Log.d("🔥 PHONE_ADD", "syncEntryToFirebase() hívás...")
+
+                    workspaceViewModel.syncEntryToFirebase(firebaseEntry)
+
+                    android.util.Log.d("🔥 PHONE_ADD", "syncEntryToFirebase() meghívva!")
+                } else {
+                    android.util.Log.e("🔥 PHONE_ADD", "❌ NINCS workspace! Firebase sync KIHAGYVA!")
+                }
+
+                android.util.Log.d("🔥 PHONE_ADD", "===== VÉGE =====")
 
                 if (shouldClose) {
                     categoryForAddDialog = null
                     selectedGroupForAdd = null
                 }
             },
-            opacity = settings.dialogOpacity  // ← ÚJ!
-
+            opacity = settings.dialogOpacity
         )
     }
 
@@ -487,10 +612,37 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
         EditEntryDialog(
             entry = entry,
             onDismissRequest = { entryToEdit = null },
-            onModify = { viewModel.updateEntry(it); entryToEdit = null },
-            onDelete = { viewModel.deleteEntry(it); entryToEdit = null },
-            opacity = settings.dialogOpacity  // ← ÚJ!
+            onModify = { modifiedEntry ->
+                // ═══════════════════════════════════════════════════════════
+                // JAVÍTÁS: FIREBASE SYNC HOZZÁADÁSA!
+                // ═══════════════════════════════════════════════════════════
 
+                // 1. LOKÁLIS MENTÉS (Room)
+                viewModel.updateEntry(modifiedEntry)
+
+                // 2. FIREBASE SYNC (ha van workspace)
+                if (currentWorkspace != null) {
+                    android.util.Log.d("🔥 UPDATE_ENTRY", "Entry frissítése Firebase-ben: ${modifiedEntry.id}")
+                    android.util.Log.d("🔥 UPDATE_ENTRY", "Új érték: ${modifiedEntry.value}")
+                    android.util.Log.d("🔥 UPDATE_ENTRY", "Megjegyzés: ${modifiedEntry.note}")
+
+                    workspaceViewModel.syncEntryToFirebase(modifiedEntry)
+                }
+
+                entryToEdit = null
+            },
+            onDelete = {
+                // 1. LOKÁLIS TÖRLÉS (Room)
+                viewModel.deleteEntry(it)
+
+                // 2. FIREBASE TÖRLÉS (ha van workspace)
+                if (currentWorkspace != null) {
+                    workspaceViewModel.deleteEntryFromFirebase(it.id)
+                }
+
+                entryToEdit = null
+            },
+            opacity = settings.dialogOpacity
         )
     }
 
@@ -511,7 +663,33 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
     if (showAdminDialog) {
         AdminDialog(
             onDismissRequest = { showAdminDialog = false },
-            onDeleteToday = { viewModel.deleteTodayEntries(); showAdminDialog = false },
+            onDeleteToday = {
+                // ═══════════════════════════════════════════════════════════
+                // JAVÍTÁS: FIREBASE TÖRLÉS IS!
+                // ═══════════════════════════════════════════════════════════
+
+                // 1. LOKÁLIS TÖRLÉS (Room)
+                viewModel.deleteTodayEntries()
+
+                // 2. FIREBASE TÖRLÉS (ha van workspace)
+                if (currentWorkspace != null) {
+                    android.util.Log.d("🔥 DELETE_TODAY", "Mai számok törlése Firebase-ből")
+
+                    scope.launch {
+                        // Töröljük az ÖSSZES mai entry-t Firebase-ből
+                        val todayEntries = displayEntries  // Ez már Firebase entry-k!
+
+                        android.util.Log.d("🔥 DELETE_TODAY", "Törlendő entry-k: ${todayEntries.size} db")
+
+                        todayEntries.forEach { entry ->
+                            workspaceViewModel.deleteEntryFromFirebase(entry.id)
+                            android.util.Log.d("🔥 DELETE_TODAY", "Entry törölve: ${entry.id}")
+                        }
+                    }
+                }
+
+                showAdminDialog = false
+                            },
             onGenerateYesterday = { viewModel.generateTestData(1); showAdminDialog = false },
             onGenerateWeek = { viewModel.generateTestData(7); showAdminDialog = false },
             onGenerateToday = { viewModel.generateTodayData(); showAdminDialog = false },
@@ -560,7 +738,6 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
     if (showCreateGroupDialog) {
         var previousGroups by remember { mutableStateOf<List<String>>(emptyList()) }
 
-        // Betöltjük az előző nap csoportjait
         LaunchedEffect(Unit) {
             previousGroups = viewModel.getPreviousDaySubCategories()
         }
@@ -569,15 +746,52 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             previousGroups = previousGroups,
             onDismissRequest = { showCreateGroupDialog = false },
             onCreateGroup = { groupName ->
-                viewModel.createEmptyGroup(groupName)  // ← ÚJ! Egyszerűbb!
+                // ═══════════════════════════════════════════════════════════
+                // JAVÍTÁS: FIREBASE SYNC HOZZÁADÁSA!
+                // ═══════════════════════════════════════════════════════════
+
+                // 1. LOKÁLIS MENTÉS (Room)
+                viewModel.createEmptyGroup(groupName)
+
+                // 2. FIREBASE SYNC (ha van workspace)
+                if (currentWorkspace != null) {
+                    val emptyGroupEntry = NumberEntry(
+                        id = System.currentTimeMillis(),
+                        value = 0,  // 0 = üres csoport marker
+                        categoryName = "Egyéb",
+                        subCategory = groupName,
+                        timestamp = Date()
+                    )
+                    workspaceViewModel.syncEntryToFirebase(emptyGroupEntry)
+
+                    android.util.Log.d("🔥 CREATE_GROUP", "Új csoport Firebase-be: $groupName")
+                }
+
                 showCreateGroupDialog = false
             },
             onImportGroups = { groupNames ->
-                viewModel.createEmptyGroups(groupNames)  // ← ÚJ! Egyszerűbb!
+                // 1. LOKÁLIS MENTÉS (Room)
+                viewModel.createEmptyGroups(groupNames)
+
+                // 2. FIREBASE SYNC (ha van workspace)
+                if (currentWorkspace != null) {
+                    groupNames.forEach { groupName ->
+                        val emptyGroupEntry = NumberEntry(
+                            id = System.currentTimeMillis() + groupNames.indexOf(groupName),
+                            value = 0,
+                            categoryName = "Egyéb",
+                            subCategory = groupName,
+                            timestamp = Date()
+                        )
+                        workspaceViewModel.syncEntryToFirebase(emptyGroupEntry)
+                    }
+
+                    android.util.Log.d("🔥 IMPORT_GROUPS", "Import Firebase-be: ${groupNames.size} db")
+                }
+
                 showCreateGroupDialog = false
             },
-            opacity = settings.dialogOpacity  // ← ÚJ!
-
+            opacity = settings.dialogOpacity
         )
     }
 
@@ -599,15 +813,47 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             groupName = groupName,
             onDismissRequest = { groupToEdit = null },
             onRename = { newName ->
-                viewModel.renameSubCategory(groupName, newName)
+                if (currentWorkspace != null) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Workspace módban nem lehet átnevezni csoportot!",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    viewModel.renameSubCategory(groupName, newName)
+                }
                 groupToEdit = null
             },
             onDelete = {
+                // ═══════════════════════════════════════════════════════════
+                // JAVÍTÁS: FIREBASE TÖRLÉS HOZZÁADÁSA!
+                // ═══════════════════════════════════════════════════════════
+
+                // 1. LOKÁLIS TÖRLÉS (Room)
                 viewModel.deleteGroup(groupName)
+
+                // 2. FIREBASE TÖRLÉS (ha van workspace)
+                if (currentWorkspace != null) {
+                    android.util.Log.d("🔥 DELETE_GROUP", "Csoport törlése Firebase-ből: $groupName")
+
+                    // Firebase-ből töröljük a csoport összes entry-jét
+                    scope.launch {
+                        val groupEntries = displayEntries.filter {  // ← JAVÍTVA: displayEntries!
+                            it.categoryName == "Egyéb" && it.subCategory == groupName
+                        }
+
+                        android.util.Log.d("🔥 DELETE_GROUP", "Törlendő entry-k: ${groupEntries.size} db")
+
+                        groupEntries.forEach { entry ->
+                            workspaceViewModel.deleteEntryFromFirebase(entry.id)
+                            android.util.Log.d("🔥 DELETE_GROUP", "Entry törölve: ${entry.id}")
+                        }
+                    }
+                }
+
                 groupToEdit = null
             },
-            opacity = settings.dialogOpacity  // ← ÚJ!
-
+            opacity = settings.dialogOpacity
         )
     }
 
@@ -622,7 +868,30 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
             confirmButton = {
                 TextButton(
                     onClick = {
+                        // ═══════════════════════════════════════════════════════════
+                        // JAVÍTÁS: FIREBASE TÖRLÉS HOZZÁADÁSA!
+                        // ═══════════════════════════════════════════════════════════
+
+                        // 1. LOKÁLIS TÖRLÉS (Room)
                         viewModel.deleteAllEgyebGroups()
+
+                        // 2. FIREBASE TÖRLÉS (ha van workspace)
+                        if (currentWorkspace != null) {
+                            android.util.Log.d("🔥 DELETE_ALL", "Minden csoport törlése Firebase-ből")
+
+                            scope.launch {
+                                val allEgyebEntries = displayEntries.filter {  // ← JAVÍTVA: displayEntries!
+                                    it.categoryName == "Egyéb"
+                                }
+
+                                android.util.Log.d("🔥 DELETE_ALL", "Törlendő entry-k: ${allEgyebEntries.size} db")
+
+                                allEgyebEntries.forEach { entry ->
+                                    workspaceViewModel.deleteEntryFromFirebase(entry.id)
+                                }
+                            }
+                        }
+
                         showDeleteAllGroupsDialog = false
                     },
                     colors = ButtonDefaults.textButtonColors(
@@ -637,8 +906,7 @@ fun MainScreen(navController: NavController, viewModel: MainViewModel) {
                     Text("Mégse")
                 }
             },
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = settings.dialogOpacity)  // ← ÚJ!
-
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = settings.dialogOpacity)
         )
     }
 
@@ -707,12 +975,22 @@ fun EditScreen(navController: NavController, viewModel: MainViewModel, categoryN
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
+fun CalendarScreen(
+    navController: NavController,
+    viewModel: MainViewModel,
+    workspaceViewModel: WorkspaceViewModel = viewModel()  // ← ÚJ PARAMÉTER!
+) {
     val selectedDateEntries by viewModel.selectedDayEntries.collectAsState()
     val daysWithData by viewModel.daysWithData.collectAsState()
     val settings by viewModel.settings.collectAsState()  // ← ÚJ!
 
     val debugModeEnabled by viewModel.debugModeEnabled.collectAsState()
+
+    val currentWorkspace by workspaceViewModel.currentWorkspace.collectAsState()
+
+    val allEntries by viewModel.todayEntries.collectAsState()
+
+
 
     var lastWorkdayEntries by remember { mutableStateOf<List<NumberEntry>>(emptyList()) }
     var entryToEdit by remember { mutableStateOf<NumberEntry?>(null) }
@@ -724,6 +1002,8 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
     var groupToEdit by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current  // ← ÚJ!
+
 
     // Naptár állapot
     val calendarState = io.github.boguszpawlowski.composecalendar.rememberSelectableCalendarState(
@@ -793,15 +1073,44 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
             previousGroups = previousGroups,
             onDismissRequest = { showCreateGroupDialog = false },
             onCreateGroup = { groupName ->
+                // 1. LOKÁLIS MENTÉS (Room)
                 viewModel.createEmptyGroup(groupName)
+
+                // 2. FIREBASE SYNC (ha van workspace)
+                if (currentWorkspace != null) {
+                    val emptyGroupEntry = NumberEntry(
+                        id = System.currentTimeMillis(),
+                        value = 0,  // 0 = üres csoport marker
+                        categoryName = "Egyéb",
+                        subCategory = groupName,
+                        timestamp = Date()
+                    )
+                    workspaceViewModel.syncEntryToFirebase(emptyGroupEntry)
+                }
+
                 showCreateGroupDialog = false
             },
             onImportGroups = { groupNames ->
+                // 1. LOKÁLIS MENTÉS (Room)
                 viewModel.createEmptyGroups(groupNames)
+
+                // 2. FIREBASE SYNC (ha van workspace)
+                if (currentWorkspace != null) {
+                    groupNames.forEach { groupName ->
+                        val emptyGroupEntry = NumberEntry(
+                            id = System.currentTimeMillis() + groupNames.indexOf(groupName),  // Egyedi ID
+                            value = 0,
+                            categoryName = "Egyéb",
+                            subCategory = groupName,
+                            timestamp = Date()
+                        )
+                        workspaceViewModel.syncEntryToFirebase(emptyGroupEntry)
+                    }
+                }
+
                 showCreateGroupDialog = false
             },
-            opacity = settings.dialogOpacity  // ← ÚJ!
-
+            opacity = settings.dialogOpacity
         )
     }
 
@@ -860,11 +1169,35 @@ fun CalendarScreen(navController: NavController, viewModel: MainViewModel) {
             groupName = groupName,
             onDismissRequest = { groupToEdit = null },
             onRename = { newName ->
-                viewModel.renameSubCategory(groupName, newName)
+                if (currentWorkspace != null) {
+                    // Workspace módban NEM engedélyezzük az átnevezést
+                    android.widget.Toast.makeText(
+                        context,
+                        "Workspace módban nem lehet átnevezni csoportot!",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    viewModel.renameSubCategory(groupName, newName)
+                }
                 groupToEdit = null
             },
             onDelete = {
+                // 1. LOKÁLIS TÖRLÉS (Room)
                 viewModel.deleteGroup(groupName)
+
+                // 2. FIREBASE TÖRLÉS (ha van workspace)
+                if (currentWorkspace != null) {
+                    // Firebase-ből töröljük a csoport összes entry-jét
+                    scope.launch {
+                        val groupEntries = allEntries.filter {
+                            it.categoryName == "Egyéb" && it.subCategory == groupName
+                        }
+                        groupEntries.forEach { entry ->
+                            workspaceViewModel.deleteEntryFromFirebase(entry.id)
+                        }
+                    }
+                }
+
                 groupToEdit = null
             },
             opacity = settings.dialogOpacity  // ← ÚJ!
@@ -2975,6 +3308,7 @@ private class FakeMainViewModel : MainViewModel(object : NumberEntryDao {
 @Composable
 fun KiesoCounterAppPreview() {
     KiesoCounter_v3_1_1Theme {
-        KiesoCounterApp(viewModel = FakeMainViewModel())  // ← JAVÍTVA!
+        // Preview egyszerűsítve - nincs viewModel paraméter
+        Text("Preview not available")
     }
 }
