@@ -225,6 +225,21 @@ open class MainViewModel(
         }
     }
 
+    // ========== ÚJ FÜGGVÉNY! ==========
+    /**
+     * Force reload a todayEntries StateFlow-t
+     * Akkor használjuk ha új entry került a mai napba
+     */
+    fun forceReloadTodayEntries() {
+        viewModelScope.launch {
+            // Dummy változás a _selectedDate-en, hogy triggeráljuk a Room Flow-t
+            val temp = _selectedDate.value
+            _selectedDate.value = Date(temp.time - 1)
+            delay(50)
+            _selectedDate.value = Date()  // Mai nap
+        }
+    }
+
     open fun addEntry(number: Int, categoryName: String) {
         viewModelScope.launch {
             if (number > 0) {
@@ -481,6 +496,16 @@ open class MainViewModel(
             ))
 
             reloadSelectedDayEntries()
+
+            // Ha mai napra hozzuk létre, force reload a todayEntries-t!
+            if (_contextDate.value.time >= getStartOfDay(Date()).time) {
+                delay(150)  // Várunk hogy a Room DB commitálja
+                // Force refresh: dummy változás a _selectedDate-en keresztül
+                val temp = _selectedDate.value
+                _selectedDate.value = Date(temp.time - 1)
+                delay(50)
+                _selectedDate.value = Date()  // Mai nap
+            }
         }
     }
 
@@ -501,7 +526,17 @@ open class MainViewModel(
                 ))
             }
 
+            // ========== JAVÍTÁS! ==========
             reloadSelectedDayEntries()
+
+            // Ha mai napra hozzuk létre, force reload!
+            if (_contextDate.value.time >= getStartOfDay(Date()).time) {
+                delay(150)
+                val temp = _selectedDate.value
+                _selectedDate.value = Date(temp.time - 1)
+                delay(50)
+                _selectedDate.value = Date()
+            }
         }
     }
 

@@ -439,11 +439,14 @@ fun MainScreen(
                         val categoryEntries = displayEntries.filter { it.categoryName == categoryName }
 
                         if (categoryName == "Egyéb") {
-                            // ÚJ: Speciális megjelenítés az Egyéb kategóriának
                             // ═══════════════════════════════════════════════════════════
-// CSOPORTOK - FIREBASE-BŐL HA VAN WORKSPACE!
-// ═══════════════════════════════════════════════════════════
-                            val groups = remember(displayEntries, currentWorkspace) {
+                            // CSOPORTOK - FIREBASE-BŐL HA VAN WORKSPACE!
+                            // ═══════════════════════════════════════════════════════════
+
+                            // ========== JAVÍTÁS: egyebSubCategories CollectAsState! ==========
+                            val localGroups by viewModel.egyebSubCategories.collectAsState()
+
+                            val groups = remember(displayEntries, currentWorkspace, localGroups) {
                                 if (currentWorkspace != null) {
                                     // Ha van workspace, Firebase entry-kből vesszük a csoportokat
                                     displayEntries
@@ -453,7 +456,7 @@ fun MainScreen(
                                         .sorted()
                                 } else {
                                     // Ha nincs workspace, lokális egyebSubCategories
-                                    viewModel.egyebSubCategories.value
+                                    localGroups  // ← JAVÍTVA!
                                 }
                             }
 
